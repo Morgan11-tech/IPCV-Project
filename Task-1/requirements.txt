@@ -1,0 +1,3 @@
+# Tested with Python 3.12 on macOS (Apple M1 Pro)
+opencv-python==4.11.0.86   # includes cv2.FaceDetectorYN (YuNet) and cv2.FaceRecognizerSF (SFace)
+numpy==2.2.6

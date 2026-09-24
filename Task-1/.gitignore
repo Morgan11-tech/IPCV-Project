@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+# model weights are downloaded (see README)
+models/*.onnx
+# personal biometric data and evaluation recordings stay local
+player_data/
+eval_logs/
