@@ -1,3 +1,12 @@
+##For Task 3: 
+from task3_player_association import (PlayerAssociator, PoseBodyShapes, make_hand_detector,
+                                      faces_from_rush_players, draw_debug)
+##Remember to remove when we switch to pipe
+
+
+
+
+
 """
 Task 1 - Face tracking and augmented effects (standalone prototype).
 
@@ -93,6 +102,12 @@ def process_frame(frame, detector, recognizer, references, players, frame_idx, d
 def run_live(cap, detector, recognizer, references):
     """Live loop. Returns "reregister" if R was pressed, otherwise None."""
     players = tracking.create_players()
+
+    # for task 3, remember to remove when switching to pipe mode:
+    hand_detector = make_hand_detector()
+    assoc = PlayerAssociator()
+    pose_shapes = PoseBodyShapes()
+
     debug = config.DEBUG_MODE
     run_stats = evaluation.new_run_stats()
     trial = None
@@ -108,6 +123,13 @@ def run_live(cap, detector, recognizer, references):
 
         display, faces, timings = process_frame(frame, detector, recognizer, references,
                                                 players, frame_idx, debug)
+
+        # for task 3, remember to remove when switching to pipe:
+        hands = hand_detector.detect(frame, [f["box"] for f in faces])
+        bodies = pose_shapes.detect(frame)
+        result = assoc.process(frame_idx, faces_from_rush_players(players),
+                       hands, bodies=bodies)
+        draw_debug(display, assoc, hands)
 
         # FPS of the whole loop (camera + processing + display), itself
         # EMA-smoothed so the number on screen is readable.
