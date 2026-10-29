@@ -1,15 +1,8 @@
-# Task 4 — Player interaction and game control
-# Tested with Python 3.10–3.11 on Windows 11.
-# Install:  pip install -r requirements.txt
-
-# --- Core (used by task4_game.py) ---
-numpy>=1.24,<2.0
-
-# --- Demo only (used by task4_demo.py) ---
-opencv-python>=4.8,<5.0
-mediapipe>=0.10.9,<0.11
-joblib>=1.3,<2.0
-
-# --- Optional, for the victory jingle on non-Windows platforms ---
-# On Windows, winsound is used instead and pygame is not required.
-pygame>=2.5,<3.0 ; sys_platform != "win32"
+# IPCV sign race – single requirements file (Python 3.12)
+mediapipe>=0.10.30,<1.0        # 1.x crashes on Apple Silicon
+opencv-contrib-python==4.11.0.86
+numpy>=2.2,<3
+scikit-learn==1.9.1            # must match the version the sign model was saved with
+joblib
+matplotlib                     # needed by mediapipe's drawing utils
+pygame>=2.5,<3.0 ; sys_platform != "win32"   # optional: victory jingle

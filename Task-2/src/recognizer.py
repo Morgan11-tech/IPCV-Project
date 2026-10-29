@@ -36,10 +36,18 @@ separately (the format itself is untouched):
         {"track_id": int,          # stable while that hand stays visible
          "guess": str | None,      # current best word (None while idle / not moving)
          "guess_confidence": float,
+         "confidence": float,      # model probability of `guess` (use this one on screen / for scoring)
+         "timestamp": float,       # time of this frame (the `timestamp` you passed, else time.time())
+         "sign_start": float|None, # on a confirmed frame: when the hand started moving (estimate)
+         "detect_seconds": float|None, # on a confirmed frame: timestamp - sign_start (>= ~0.8 s by design)
          "confirmed": bool,        # True ONLY on the frame a sign is confirmed
          "label": str | None,      # the confirmed word on that frame, else None
          "hand", "mirrored", "top3"}   # debugging: voted hand, whether features were mirrored, top-3 guesses
     rec.timing -> {"detect_ms", "recognize_ms", "total_ms"} for the last frame
+
+    SignRecognizer(embed_sign=True) additionally puts "hand_id" and a "sign" object
+    {label, guess, confidence, confirmed, detect_seconds, sign_start, timestamp} inside each
+    hand dict. It is OFF by default so the output stays exactly the agreed format.
 
 Smoothing is applied to the OUTPUT points only. The classifier is fed the raw
 landmarks, i.e. exactly what it was trained on.
@@ -76,6 +84,8 @@ class _Track:
         self.last_confirmed = -1e9
         self.streak_label = None
         self.streak_start = 0.0
+        self.move_start = None           # when the hand started moving (sign-start estimate)
+        self.last_moving = -1e9
 
 
 class SignRecognizer:
@@ -98,6 +108,9 @@ class SignRecognizer:
         # orientation and use it when it is clearly more confident (guards against a wrong label)
         mirror_mode="auto",
         mirror_margin=0.15,
+        # embed_sign=True adds "hand_id" and a "sign" object INSIDE each hand dict (off by default so the
+        # output stays exactly the agreed Task 2 -> Task 3 format)
+        embed_sign=False,
         # tracking
         track_timeout=0.3,
         max_link_dist=0.25,
@@ -115,6 +128,7 @@ class SignRecognizer:
         self.idle_label = idle_label
         self.mirror_mode = mirror_mode
         self.mirror_margin = mirror_margin
+        self.embed_sign = embed_sign
         self.track_timeout = track_timeout
         self.max_link_dist = max_link_dist
         self.smooth_min_cutoff = smooth_min_cutoff
@@ -176,6 +190,10 @@ class SignRecognizer:
                 "box": [round(x0, 5), round(y0, 5), round(x1 - x0, 5), round(y1 - y0, 5)],
             }
             sign = self._recognize(trk, det["lms"], t, aspect)
+            if self.embed_sign:
+                hand["hand_id"] = trk.id
+                hand["sign"] = {k: sign[k] for k in ("label", "guess", "confidence", "confirmed",
+                                                      "detect_seconds", "sign_start", "timestamp")}
             entries.append(((x0 + x1) / 2.0, hand, sign))
 
         entries.sort(key=lambda e: e[0])             # left-to-right
@@ -236,12 +254,23 @@ class SignRecognizer:
 
     # --------------------------------------------------------- recognition
     def _recognize(self, trk, lms, t, aspect):
-        info = {"track_id": trk.id, "guess": None, "guess_confidence": 0.0,
-                "confirmed": False, "label": None}
+        info = {"track_id": trk.id, "guess": None, "guess_confidence": 0.0, "confidence": 0.0,
+                "confirmed": False, "label": None,
+                "timestamp": round(float(t), 4), "sign_start": None, "detect_seconds": None}
         raw63, scale = extract_frame(lms, aspect)
         trk.buffer.append((t, raw63, scale))
         while trk.buffer and t - trk.buffer[0][0] > self.buffer_seconds:
             trk.buffer.popleft()
+
+        # sign-start estimate: the moment the hand began moving after being still (0.3 s hysteresis)
+        if len(trk.buffer) >= 4:
+            last4 = list(trk.buffer)[-4:]
+            if motion_energy([b[1] for b in last4]) >= self.motion_threshold:
+                if trk.move_start is None:
+                    trk.move_start = last4[0][0]
+                trk.last_moving = t
+        if trk.move_start is not None and t - trk.last_moving > 0.3:
+            trk.move_start = None
 
         if len(trk.buffer) < 5:
             trk.streak_label = None
@@ -280,6 +309,7 @@ class SignRecognizer:
         best = int(order[0])
         label, conf = self._clf.classes_[best], float(probs[best])
         info["guess"], info["guess_confidence"] = str(label), round(conf, 4)
+        info["confidence"] = round(conf, 4)
         info["hand"] = "Left" if voted_left else "Right"
         info["mirrored"] = bool(mirrored)
         info["top3"] = [(str(self._clf.classes_[i]), round(float(probs[i]), 3)) for i in order]
@@ -292,8 +322,12 @@ class SignRecognizer:
             if held >= self.confirm_seconds and (t - trk.last_confirmed) >= self.cooldown_seconds:
                 trk.last_confirmed = t
                 trk.streak_label = None
+                start = trk.move_start if trk.move_start is not None else times[0]
                 trk.buffer.clear()               # don't re-trigger on this gesture's tail
+                trk.move_start = None            # the next sign starts a new attempt
                 info["confirmed"], info["label"] = True, str(label)
+                info["sign_start"] = round(float(start), 4)
+                info["detect_seconds"] = round(max(0.0, float(t - start)), 3)
         else:
             trk.streak_label = None
         return info

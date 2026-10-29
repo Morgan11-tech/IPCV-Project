@@ -1,60 +1,13 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Oct 16 23:13:27 2026
-
-@author: ruvah
-"""
-
 """
 Task 4 — Player interaction and game control  (sign race)
 =========================================================
 DELIVERABLE MODULE for Task 5 integration.
-
-This file contains ONLY game logic and drawing.  It does NOT touch the
-webcam, MediaPipe, Task 2's model files, or any external resource.
-Task 5 owns the main loop and feeds this module `PlayerInput` objects
-once per frame.
-
-ACTIONS (per player)
-  1. SIGN    - sign the target word.  FIRST correct locked sign wins the round.
-  2. READY   - hold an open palm still ~0.7 s to start / restart.
-  3. DEFEND  - cross both arms over your chest for 0.3 s.
-               While defending you take only HALF points from a loss.
-
-LEVEL PROGRESSION (5 words per level, 15 words total)
-  Level 1 -> 15 s : please, no, yes, hello, more
-  Level 2 -> 10 s : bathroom, apple, color, boy, glasses
-  Level 3 ->  5 s : yesterday, brown, football, water, red
-  Advance when either player hits LEVEL_UP_SCORE (default 20 pts = 2 wins).
-
-PUBLIC API (what Task 5 uses)
-  PlayerInput        - one per player per frame
-  GameController     - state machine; call .update(t_ms, inputs) each frame
-  EffectsLayer       - visual feedback anchored to player positions
-  WinnerDancer       - victory animation
-  VictoryJingle      - synthesised victory sound
-  draw_hud           - scores, timer, level, phase
-  anchors_from_inputs- helper to compute {pid: {center, r}} for effects
-  detect_defending   - pure pose -> bool helper (Task 2 calls it)
-
-EVENTS emitted by GameController.update():
-  {"type": "game_start"}
-  {"type": "score_event",  "player_id", "points", "target", ...}
-  {"type": "wrong_sign",   "player_id", "word", "target"}
-  {"type": "clash",        "player_ids", "target", "points"}
-  {"type": "round_timeout","target"}
-  {"type": "level_up",     "level", "window_ms"}
-  {"type": "defend_start", "player_id"}
-  {"type": "defend_end",   "player_id"}
-  {"type": "game_over",    "winner", "scores"}
-  {"type": "action_event", "player_id", "action"}
 """
 
 import math
 import os
 import random
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -66,7 +19,8 @@ import numpy as np
 # =====================================================================
 PLAYER_IDS = (1, 2)
 POINTS_PER_WIN = 10
-WIN_SCORE = 50
+MAX_HEARTS = 3
+WIN_SCORE = None
 
 TIE_WINDOW_MS = 150
 WRONG_LOCKOUT_MS = 1500
@@ -78,63 +32,54 @@ STILL_SPEED = 1.5
 SIGNING_CONF = 0.5
 GRACE_MS = 250
 
+# --- New targeted confidence threshold ---
+TARGET_CONFIDENCE = 0.60  # Must be at least 60% confident it is the exact target word
+
 LEVEL_TIMES_MS = {1: 15000, 2: 10000, 3: 5000}
 LEVEL_UP_SCORE = 20
 MAX_LEVEL = 3
-WORDS_PER_LEVEL = 5
 
 LEVEL_WORDS = {
-    1: ["please", "no", "yes", "hello", "more"],
-    2: ["bathroom", "apple", "color", "boy", "glasses"],
-    3: ["yesterday", "brown", "football", "water", "red"],
+    1: ["hello", "no", "yes", "more"],
+    2: ["red", "apple", "color", "boy"],
+    3: ["yesterday", "brown", "football", "water", "please"],
 }
 
 JINGLE_ENABLED = True
 JINGLE_VOLUME = 0.35
-
-DEFEND_HOLD_MS = 300
-DEFEND_COOLDOWN_MS = 1500
-DEFEND_SCORE_MULTIPLIER = 0.5
-
 STREAK_GLOW_THRESHOLD = 2
 
 
 # =====================================================================
-#  PUBLIC DATA CONTRACTS
+#  DATA CONTRACTS
 # =====================================================================
 @dataclass
 class PlayerInput:
-    """Everything the controller needs about ONE player in ONE frame.
-
-    Task 5 fills this in from Task 1 / 2 / 3 outputs.
-    """
     present: bool = True
-    hands: list = field(default_factory=list)         # (21,3) pixel arrays (for READY + display)
-    word: Optional[str] = None                        # Task 2: confirmed or best guess
-    conf: float = 0.0                                 # Task 2: confidence
-    locked: bool = False                              # Task 2: True only on confirm frame
-    face_box: Optional[tuple] = None                  # Task 1: (x, y, w, h)
-    defending: bool = False                           # Task 2 pose: in defend pose
+    hands: list = field(default_factory=list)         
+    word: Optional[str] = None                        
+    conf: float = 0.0                                 
+    locked: bool = False                              
+    face_box: Optional[tuple] = None                  
+    # NEW: A dictionary of all word probabilities, e.g. {"more": 0.65, "no": 0.1}
+    word_probs: dict = field(default_factory=dict)    
 
 
 @dataclass
 class PlayerState:
     id: int
     score: int = 0
+    hearts: int = MAX_HEARTS
     ready: bool = False
     lockout_until: int = 0
     needs_release: bool = False
     release_since: Optional[int] = None
     prev_wrist: Optional[tuple] = None
     ready_dwell: "Dwell" = field(default_factory=lambda: Dwell())
-    defending_since: Optional[int] = None
-    defend_active: bool = False
-    defend_cooldown_until: int = 0
     win_streak: int = 0
 
 
 class Dwell:
-    """'Has this condition been true long enough?' with a short grace period."""
     def __init__(self, grace_ms=GRACE_MS):
         self.grace, self.since, self.last_true = grace_ms, None, None
 
@@ -152,7 +97,7 @@ class Dwell:
 
 
 # =====================================================================
-#  PURE HELPERS  (no external deps beyond numpy)
+#  PURE HELPERS
 # =====================================================================
 def hand_size(pts):
     pts = np.asarray(pts, dtype=np.float32).reshape(21, 3)
@@ -165,7 +110,6 @@ def _finger_extended(pts, tip, pip):
 
 
 def is_open_palm(points):
-    """True when all four fingers and the thumb are stretched out."""
     pts = np.asarray(points, dtype=np.float32).reshape(21, 3)
     four = all(_finger_extended(pts, t, p) for t, p in ((8, 6), (12, 10), (16, 14), (20, 18)))
     thumb = (np.linalg.norm(pts[4, :2] - pts[17, :2]) >
@@ -174,8 +118,6 @@ def is_open_palm(points):
 
 
 def landmarks_to_xyz(lm, W, H):
-    """Convert MediaPipe NormalizedLandmark list to a (21,3) pixel array.
-    Convenience helper for Task 5; not used internally."""
     pts = np.zeros((21, 3), dtype=np.float32)
     for i in range(21):
         pts[i, 0] = lm[i].x * W
@@ -185,7 +127,6 @@ def landmarks_to_xyz(lm, W, H):
 
 
 def synthetic_hand(center, size, open_palm=True):
-    """Fake 21-point hand for tests. Fingers point up."""
     P = np.zeros((21, 3), dtype=np.float32)
     for k, (x, y) in enumerate([(-0.2, -0.2), (-0.35, -0.3), (-0.5, -0.4), (-0.65, -0.5)]):
         P[1 + k, :2] = (x, y)
@@ -199,40 +140,7 @@ def synthetic_hand(center, size, open_palm=True):
     return P
 
 
-def detect_defending(pose_landmarks, W, H):
-    """Return True when both wrists are near the chest and above the elbows.
-
-    `pose_landmarks` is a sequence of 33 (x, y[, z]) triples (MediaPipe Pose order).
-    Accepts normalised (0..1) or pixel coordinates.
-    """
-    if pose_landmarks is None or len(pose_landmarks) < 25:
-        return False
-    pts = np.asarray(pose_landmarks, dtype=np.float32)
-    if pts[:, :2].max() > 1.5:
-        pts = pts.copy()
-        pts[:, 0] /= max(W, 1)
-        pts[:, 1] /= max(H, 1)
-
-    ls, rs = pts[11, :2], pts[12, :2]
-    le, re = pts[13, :2], pts[14, :2]
-    lw, rw = pts[15, :2], pts[16, :2]
-    lh, rh = pts[23, :2], pts[24, :2]
-
-    chest = 0.5 * (ls + rs)
-    hip_mid = 0.5 * (lh + rh)
-    torso_h = max(np.linalg.norm(chest - hip_mid), 1e-3)
-
-    near_chest = (np.linalg.norm(lw - chest) < 0.55 * torso_h and
-                  np.linalg.norm(rw - chest) < 0.55 * torso_h)
-    above_elbows = lw[1] < le[1] and rw[1] < re[1]
-    return bool(near_chest and above_elbows)
-
-
 def anchors_from_inputs(inputs, defaults=None):
-    """Compute {pid: {"center": (x,y), "r": r}} for effects.
-
-    Prefers face_box (Task 1), falls back to hands (Task 2), then defaults.
-    """
     out = {}
     for pid, inp in inputs.items():
         if inp.face_box is not None:
@@ -250,18 +158,6 @@ def anchors_from_inputs(inputs, defaults=None):
 #  GAME CONTROLLER
 # =====================================================================
 class GameController:
-    """Pure state machine. No I/O, no rendering, no file loading.
-
-    Usage:
-        gc = GameController(player_ids=(1, 2), words=None)
-        while running:
-            events = gc.update(t_ms, {1: PlayerInput(...), 2: PlayerInput(...)})
-            for e in events:
-                if e["type"] in ("score_event", "clash", "round_timeout"):
-                    gc.next_word(t_ms + 1500)   # schedule next round
-            snap = gc.snapshot(t_ms)
-    """
-
     def __init__(self, player_ids=PLAYER_IDS, words=None):
         self.ids = list(player_ids)
         if words is None:
@@ -280,7 +176,6 @@ class GameController:
                               for lvl, words in LEVEL_WORDS.items()}
         self._queue_pos = {lvl: 0 for lvl in LEVEL_WORDS}
 
-    # --- target spawning ---
     def set_target(self, word, spawned_ms):
         window = LEVEL_TIMES_MS[self.level]
         self.target = {"word": word, "spawned_ms": spawned_ms,
@@ -290,7 +185,6 @@ class GameController:
             st.lockout_until = 0
 
     def next_word(self, t_ms):
-        """Pick the next word from the current level's 5-word queue."""
         lvl = self.level
         q = self._level_queues[lvl]
         pos = self._queue_pos[lvl]
@@ -306,7 +200,6 @@ class GameController:
         return {"type": kind, "frame_id": self._frame_id, "timestamp_ms": int(t), **kw}
 
     def update(self, t_ms, inputs, frame_id=0):
-        """Advance the state machine by one frame. Returns a list of events."""
         ev = []
         self._frame_id = frame_id
         if self.phase in ("waiting", "game_over"):
@@ -315,7 +208,6 @@ class GameController:
             for pid in self.ids:
                 inp, st = inputs.get(pid), self.players[pid]
                 if inp is not None and inp.present:
-                    self._defend(st, inp, t_ms, ev)
                     self._sign(st, inp, t_ms, ev)
             self._resolve_round(t_ms, ev)
             self._check_end(t_ms, ev)
@@ -351,21 +243,6 @@ class GameController:
             self.phase = "playing"
             ev.append(self._ev("game_start", t))
 
-    def _defend(self, st, inp, t, ev):
-        if not inp.defending:
-            if st.defend_active:
-                st.defend_active = False
-                ev.append(self._ev("defend_end", t, player_id=st.id))
-            st.defending_since = None
-            return
-        if st.defending_since is None:
-            st.defending_since = t
-        held = t - st.defending_since
-        if (not st.defend_active and held >= DEFEND_HOLD_MS
-                and t >= st.defend_cooldown_until):
-            st.defend_active = True
-            ev.append(self._ev("defend_start", t, player_id=st.id))
-
     def _sign(self, st, inp, t, ev):
         if not inp.locked:
             if inp.word is None:
@@ -381,17 +258,28 @@ class GameController:
         st.needs_release = True
         if not self.round_open or self.target is None or t > self.target["expires_ms"]:
             return
-        if inp.word and inp.word.strip().lower() == self.target["word"].strip().lower():
-            self.pending.setdefault(st.id, (t, inp.conf))
+
+        target_word = self.target["word"].strip().lower()
+        
+        # --- NEW TARGETED LOGIC ---
+        # Check if the classifier explicitly predicts the target word with high confidence
+        target_prob = inp.word_probs.get(target_word, 0.0)
+        
+        if target_prob >= TARGET_CONFIDENCE:
+            # Player successfully signed the target word!
+            self.pending.setdefault(st.id, (t, target_prob))
         else:
+            # Player signed something else (or wasn't confident enough)
             st.lockout_until = t + WRONG_LOCKOUT_MS
             ev.append(self._ev("wrong_sign", t, player_id=st.id, word=inp.word,
-                               target=self.target["word"], confidence=inp.conf))
+                               target=target_word, confidence=inp.conf))
 
     def _resolve_round(self, t, ev):
         if not self.pending:
             if self.round_open and self.target and t > self.target["expires_ms"]:
                 self.round_open = False
+                for pid in self.ids:
+                    self.players[pid].hearts = max(0, self.players[pid].hearts - 1)
                 ev.append(self._ev("round_timeout", t, target=self.target["word"]))
             return
         first_t = min(v[0] for v in self.pending.values())
@@ -402,16 +290,11 @@ class GameController:
         self.round_open, self.pending = False, {}
         word = self.target["word"]
         if len(cands) > 1:
-            for _, pid, _ in cands:
-                self.players[pid].score += POINTS_PER_WIN // 2
             ev.append(self._ev("clash", t, player_ids=[p for _, p, _ in cands],
-                               target=word, points=POINTS_PER_WIN // 2))
+                               target=word, points=0))
             return
         tt, winner, conf = cands[0]
         reward = POINTS_PER_WIN
-        if self.players[winner].defend_active:
-            reward = int(round(POINTS_PER_WIN * DEFEND_SCORE_MULTIPLIER))
-            self.players[winner].defend_cooldown_until = t + DEFEND_COOLDOWN_MS
         self.players[winner].score += reward
         for pid in self.ids:
             if pid == winner:
@@ -421,7 +304,6 @@ class GameController:
         ev.append(self._ev("score_event", tt, player_id=winner, word=word, letter=word,
                            target=word, correct=True, first=True, confidence=conf,
                            points=reward, score=self.players[winner].score,
-                           defended=self.players[winner].defend_active,
                            streak=self.players[winner].win_streak))
         top = max(self.players[p].score for p in self.ids)
         new_level = min(MAX_LEVEL, 1 + top // LEVEL_UP_SCORE)
@@ -432,32 +314,29 @@ class GameController:
                                window_ms=LEVEL_TIMES_MS[self.level]))
 
     def _check_end(self, t, ev):
-        if WIN_SCORE is None:
-            return
-        scores = {p: self.players[p].score for p in self.ids}
-        top = max(scores.values())
-        leaders = [p for p, s in scores.items() if s == top]
-        if top >= WIN_SCORE and len(leaders) == 1:
-            self.phase, self.winner, self.round_open = "game_over", leaders[0], False
+        dead = [p for p in self.ids if self.players[p].hearts <= 0]
+        if dead:
+            alive = [p for p in self.ids if p not in dead]
+            self.phase = "game_over"
+            self.round_open = False
+            self.winner = alive[0] if len(alive) == 1 else None
             for st in self.players.values():
                 st.ready = False; st.ready_dwell.reset(); st.prev_wrist = None
-                st.defend_active = False; st.defending_since = None
-            ev.append(self._ev("game_over", t, winner=self.winner, scores=scores))
+            ev.append(self._ev("game_over", t, winner=self.winner,
+                               scores={p: self.players[p].score for p in self.ids},
+                               hearts={p: self.players[p].hearts for p in self.ids}))
 
     def snapshot(self, t_ms):
-        """Current state for Task 5's scene renderer and Task 4's HUD."""
         return {"phase": self.phase, "target": self.target, "round_open": self.round_open,
                 "winner": self.winner, "level": self.level,
                 "level_window_ms": LEVEL_TIMES_MS[self.level],
-                "players": [{"player_id": p.id, "score": p.score, "ready": p.ready,
-                             "locked_out": t_ms < p.lockout_until,
-                             "defending": p.defend_active,
-                             "streak": p.win_streak}
+                "players": [{"player_id": p.id, "score": p.score, "hearts": p.hearts, "ready": p.ready,
+                             "locked_out": t_ms < p.lockout_until, "streak": p.win_streak}
                             for p in self.players.values()]}
 
 
 # =====================================================================
-#  VISUAL FEEDBACK  (drawing only)
+#  VISUAL FEEDBACK
 # =====================================================================
 def _txt(img, text, org, scale=0.8, color=(255, 255, 255), thick=2):
     import cv2
@@ -466,13 +345,6 @@ def _txt(img, text, org, scale=0.8, color=(255, 255, 255), thick=2):
 
 
 class EffectsLayer:
-    """Turns game events into short animations anchored to the right player.
-
-    Usage:
-        fx = EffectsLayer()
-        fx.on_events(events, t_ms)          # register animations
-        fx.draw(frame, t_ms, anchors)       # draw them
-    """
     def __init__(self):
         self.fx = []
 
@@ -496,8 +368,6 @@ class EffectsLayer:
                 self._add("banner", None, t, 1200, "GO!")
             elif k == "level_up":
                 self._add("banner", None, t, 1500, f"LEVEL {e['level']}!")
-            elif k == "defend_start":
-                self._add("ready", e["player_id"], t, 900, "DEFEND!")
 
     def draw(self, frame, t, anchors):
         import cv2
@@ -525,10 +395,6 @@ class EffectsLayer:
 
 
 def draw_hud(frame, snap, inputs, t, show_scores=True):
-    """Scores, live guesses, target word + timer, level, phase messages.
-
-    Safe to call on any BGR frame. Task 5 can call this last, after their scene.
-    """
     import cv2
     H, W = frame.shape[:2]
     n = len(snap["players"])
@@ -537,16 +403,26 @@ def draw_hud(frame, snap, inputs, t, show_scores=True):
         _txt(frame, f"P{p['player_id']}", (x0, y0), 0.9)
         if show_scores:
             _txt(frame, f"{p['score']}", (x0 + 70, y0 + 5), 1.6, (0, 255, 255), 3)
+        
+        for h in range(MAX_HEARTS):
+            color = (60, 60, 255) if h < p.get("hearts", MAX_HEARTS) else (80, 80, 80)
+            cx, cy = x0 + 130 + (h * 30), y0 + 3
+            pts = np.array([[cx, cy + 8], [cx - 8, cy - 2], [cx + 8, cy - 2]], np.int32)
+            cv2.fillPoly(frame, [pts], color)
+            cv2.circle(frame, (cx - 4, cy - 4), 4, color, -1)
+            cv2.circle(frame, (cx + 4, cy - 4), 4, color, -1)
+
         inp = inputs.get(p["player_id"])
-        if p.get("defending"):
-            _txt(frame, "DEFENDING", (x0, y0 + 40), 0.7, (255, 200, 0), 2)
-        elif snap["phase"] != "playing":
+        if snap["phase"] != "playing":
             _txt(frame, "READY" if p["ready"] else "hold open palm", (x0, y0 + 40), 0.65,
                  (80, 255, 80) if p["ready"] else (200, 200, 200), 2)
         elif p["locked_out"]:
             _txt(frame, "locked out", (x0, y0 + 40), 0.6, (60, 60, 255), 2)
         elif inp is not None and inp.word:
-            _txt(frame, f"guess: {inp.word} {inp.conf:.2f}" + ("  LOCKED" if inp.locked else ""),
+            # Show the target word probability if we have it
+            t_word = snap["target"]["word"] if snap["target"] else ""
+            prob = inp.word_probs.get(t_word, 0.0)
+            _txt(frame, f"guess: {inp.word} {prob:.2f}" + ("  LOCKED" if inp.locked else ""),
                  (x0, y0 + 40), 0.6, (0, 255, 0) if inp.locked else (0, 200, 255), 2)
 
     for i, p in enumerate(snap["players"]):
@@ -561,7 +437,12 @@ def draw_hud(frame, snap, inputs, t, show_scores=True):
     if snap["phase"] == "waiting":
         _txt(frame, "Both players: hold an open palm to start", (W // 2 - 280, 45), 0.9)
     elif snap["phase"] == "game_over":
-        _txt(frame, f"GAME OVER - PLAYER {snap['winner']} WINS", (W // 2 - 300, 45), 1.1, (0, 255, 255), 3)
+        if snap["winner"]:
+            w_score = next((p["score"] for p in snap["players"] if p["player_id"] == snap["winner"]), 0)
+            _txt(frame, f"GAME OVER - PLAYER {snap['winner']} WINS (Score: {w_score})", 
+                 (W // 2 - 350, 45), 1.0, (0, 255, 255), 3)
+        else:
+            _txt(frame, f"GAME OVER - DRAW", (W // 2 - 150, 45), 1.1, (0, 255, 255), 3)
         _txt(frame, "hold open palm to play again", (W // 2 - 200, 80), 0.7)
     elif snap["target"]:
         tg = snap["target"]
@@ -577,27 +458,17 @@ def draw_hud(frame, snap, inputs, t, show_scores=True):
                  (0, 255, 255) if secs > 3 else (60, 60, 255), 2)
 
 
-# =====================================================================
-#  WINNER DANCER
-# =====================================================================
 class WinnerDancer:
-    """Stick-figure that dances in the middle of the screen when someone wins.
-
-    Usage:
-        dancer = WinnerDancer()
-        # on game_over event:
-        dancer.start(t_ms, winner_id, winner_color)
-        # each frame while phase == "game_over":
-        dancer.draw(frame, t_ms)
-    """
     def __init__(self):
         self.start_t = None
         self.winner = None
+        self.winner_score = 0
         self.color = (0, 255, 255)
 
-    def start(self, t, winner_id, winner_color):
+    def start(self, t, winner_id, winner_color, score=0):
         self.start_t = t
         self.winner = winner_id
+        self.winner_score = score
         self.color = winner_color
 
     def stop(self):
@@ -641,7 +512,9 @@ class WinnerDancer:
             px = int(cx + rad * np.cos(ang)); py = int(cy + rad * np.sin(ang))
             col = [(0, 255, 255), (0, 255, 0), (255, 0, 255), (255, 255, 0)][i % 4]
             cv2.circle(frame, (px, py), 5, col, -1, cv2.LINE_AA)
-        _txt(frame, f"PLAYER {self.winner} WINS!", (cx - 170, cy - 90), 1.3, c, 3)
+        
+        _txt(frame, f"PLAYER {self.winner} WINS!", (cx - 170, cy - 110), 1.3, c, 3)
+        _txt(frame, f"Final Score: {self.winner_score}", (cx - 110, cy - 75), 1.0, (255, 255, 255), 2)
         _txt(frame, "press R to play again", (cx - 140, cy + 140), 0.7, (220, 220, 220), 2)
 
 
@@ -649,11 +522,6 @@ class WinnerDancer:
 #  VICTORY JINGLE
 # =====================================================================
 class VictoryJingle:
-    """Synthesises a short ascending arpeggio and plays it non-blocking.
-
-    Tries winsound (Windows stdlib) first; falls back to pygame.mixer.
-    If neither is available, .play() is a no-op.
-    """
     def __init__(self, enabled=JINGLE_ENABLED, volume=JINGLE_VOLUME):
         self.enabled = enabled
         self.volume = float(np.clip(volume, 0.0, 1.0))
@@ -676,7 +544,7 @@ class VictoryJingle:
     @staticmethod
     def _make_wav_bytes():
         sr = 44100
-        notes = [523.25, 659.25, 783.99, 1046.50]   # C5 E5 G5 C6
+        notes = [523.25, 659.25, 783.99, 1046.50]
         note_dur, gap = 0.18, 0.04
         samples = []
         for f in notes:
@@ -709,8 +577,7 @@ class VictoryJingle:
                     import tempfile
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
                         f.write(wav); path = f.name
-                    self._winsound.PlaySound(path, self._winsound.SND_FILENAME |
-                                             self._winsound.SND_ASYNC)
+                    self._winsound.PlaySound(path, self._winsound.SND_FILENAME | self._winsound.SND_ASYNC)
                 elif self.backend == "pygame":
                     import pygame, io
                     snd = pygame.mixer.Sound(io.BytesIO(wav))
@@ -719,90 +586,3 @@ class VictoryJingle:
                 print(f"[jingle] playback failed: {e}")
 
         threading.Thread(target=_run, daemon=True).start()
-
-
-# =====================================================================
-#  SELF-TESTS  (no camera, no Task 2 files needed)
-# =====================================================================
-def run_self_tests(verbose=True):
-    """Unit tests for the game rules. Pure, deterministic, fast."""
-    results = []
-
-    def check(name, cond):
-        results.append((name, bool(cond)))
-        if verbose:
-            print(("PASS  " if cond else "FAIL  ") + name)
-
-    PALM = synthetic_hand((300, 300), 100, True)
-    FIST = synthetic_hand((300, 300), 100, False)
-
-    def run(gc, t0, dur, fn, dt=33):
-        evs, t = [], t0
-        while t < t0 + dur:
-            evs += gc.update(int(t), fn(t))
-            t += dt
-        return evs, t
-
-    def of(evs, k):
-        return [e for e in evs if e["type"] == k]
-
-    def playing(target="please"):
-        gc = GameController()
-        gc.phase = "playing"
-        gc.set_target(target, 0)
-        return gc
-
-    idle = PlayerInput()
-    lock = lambda w: PlayerInput(word=w, conf=0.9, locked=True)
-
-    gc = playing()
-    _, t = run(gc, 0, 1000, lambda t: {1: idle, 2: idle})
-    evs, t = run(gc, t, 400, lambda t: {1: lock("please"), 2: idle})
-    evs += run(gc, t, 400, lambda t: {1: idle, 2: lock("please")})[0]
-    check("first correct sign gets +10 (one score_event)",
-          gc.players[1].score == POINTS_PER_WIN and len(of(evs, "score_event")) == 1)
-    check("later correct sign in the same round is ignored", gc.players[2].score == 0)
-
-    gc = playing()
-    evs, _ = run(gc, 1000, 600, lambda t: {1: lock("please"), 2: lock("please")})
-    check("simultaneous correct signs -> clash, half points each",
-          len(of(evs, "clash")) == 1 and gc.players[1].score == gc.players[2].score == POINTS_PER_WIN // 2)
-
-    gc = playing()
-    evs, _ = run(gc, 1000, 300, lambda t: {1: lock("water"), 2: idle})
-    check("wrong sign -> wrong_sign event, no points",
-          len(of(evs, "wrong_sign")) == 1 and gc.players[1].score == 0)
-
-    gc = playing()
-    evs, _ = run(gc, 1000, 400, lambda t: {1: lock("PLEASE"), 2: idle})
-    check("case-insensitive word match", gc.players[1].score == POINTS_PER_WIN)
-
-    # defend: controller-level unit test
-    gc = playing()
-    gc.players[1].defend_active = True
-    gc.pending = {1: (1200, 0.9)}
-    gc._resolve_round(1400, [])
-    check("defender gets half points",
-          gc.players[1].score == int(POINTS_PER_WIN * DEFEND_SCORE_MULTIPLIER))
-
-    hold = lambda t: {1: PlayerInput(hands=[PALM]), 2: PlayerInput(hands=[PALM])}
-    gc = GameController()
-    evs, _ = run(gc, 0, 1500, hold)
-    check("both players hold open palm -> game_start",
-          len(of(evs, "game_start")) == 1 and gc.phase == "playing")
-
-    gc = GameController()
-    evs, _ = run(gc, 0, 2000, lambda t: {1: PlayerInput(hands=[PALM]), 2: idle})
-    check("only one player ready -> game does not start", gc.phase == "waiting")
-
-    gc = GameController()
-    run(gc, 0, 2000, lambda t: {p: PlayerInput(hands=[FIST]) for p in (1, 2)})
-    check("closed fist does not count as ready", gc.phase == "waiting")
-
-    n_ok = sum(ok for _, ok in results)
-    print(f"\n{n_ok}/{len(results)} tests passed")
-    return results
-
-
-if __name__ == "__main__":
-    run_self_tests()
