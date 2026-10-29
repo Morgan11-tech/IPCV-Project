@@ -1,36 +1,17 @@
 """
-Drawing building blocks shared by every screen: outlined text, translucent
-rounded panels, progress bars and hearts.
+Drawing building blocks shared by every screen: translucent rounded panels
+with a soft drop shadow, progress bars and hearts. Text lives in render/text.py.
 
-Translucent panels blend only the panel's own region (not the whole frame),
-which keeps each one well under a millisecond at 1280x720.
+Translucent shapes blend only their own region (not the whole frame), which
+keeps each one well under a millisecond at 1280x720.
 """
 import cv2
 import numpy as np
 
 import theme
 
-FONT = cv2.FONT_HERSHEY_DUPLEX
-
-
-def text_size(s, scale, thick=2):
-    (w, h), _ = cv2.getTextSize(s, FONT, scale, thick)
-    return w, h
-
-
-def text(img, s, org, scale=0.8, color=theme.WHITE, thick=2, align="left", outline=True):
-    """Draw text at org (baseline). align: "left", "center" or "right"."""
-    w, h = text_size(s, scale, thick)
-    x, y = org
-    if align == "center":
-        x -= w / 2
-    elif align == "right":
-        x -= w
-    x, y = int(x), int(y)
-    if outline:
-        cv2.putText(img, s, (x, y), FONT, scale, theme.OUTLINE, thick + 3, cv2.LINE_AA)
-    cv2.putText(img, s, (x, y), FONT, scale, color, thick, cv2.LINE_AA)
-    return w, h
+SHADOW_OFFSET = 5
+SHADOW_ALPHA = 0.35
 
 
 def rounded_rect(img, x0, y0, x1, y1, color, thick=-1, radius=12):
@@ -52,9 +33,8 @@ def rounded_rect(img, x0, y0, x1, y1, color, thick=-1, radius=12):
         cv2.ellipse(img, (cx, cy), (r, r), angle, 0, 90, color, thick, cv2.LINE_AA)
 
 
-def panel(img, x, y, w, h, fill=theme.PANEL, alpha=theme.PANEL_ALPHA, border=None,
-          border_thick=2, radius=14):
-    """Translucent rounded panel, optionally with a coloured border."""
+def blend_rounded_rect(img, x, y, w, h, color, alpha, radius=14):
+    """Filled rounded rectangle mixed with what is underneath (alpha 0..1)."""
     H, W = img.shape[:2]
     x0, y0 = max(0, int(x)), max(0, int(y))
     x1, y1 = min(W, int(x + w)), min(H, int(y + h))
@@ -62,8 +42,16 @@ def panel(img, x, y, w, h, fill=theme.PANEL, alpha=theme.PANEL_ALPHA, border=Non
         return
     roi = img[y0:y1, x0:x1]
     layer = roi.copy()
-    rounded_rect(layer, x - x0, y - y0, x + w - x0 - 1, y + h - y0 - 1, fill, -1, radius)
+    rounded_rect(layer, x - x0, y - y0, x + w - x0 - 1, y + h - y0 - 1, color, -1, radius)
     cv2.addWeighted(layer, alpha, roi, 1 - alpha, 0, dst=roi)
+
+
+def panel(img, x, y, w, h, fill=theme.PANEL, alpha=theme.PANEL_ALPHA, border=None,
+          border_thick=2, radius=14, shadow=True):
+    """Translucent rounded panel with a drop shadow and optional coloured border."""
+    if shadow:
+        blend_rounded_rect(img, x, y + SHADOW_OFFSET, w, h, theme.OUTLINE, SHADOW_ALPHA, radius)
+    blend_rounded_rect(img, x, y, w, h, fill, alpha, radius)
     if border is not None:
         rounded_rect(img, x, y, x + w - 1, y + h - 1, border, border_thick, radius)
 
@@ -76,10 +64,15 @@ def bar(img, x, y, w, h, frac, color, back=theme.TRACK):
         rounded_rect(img, x, y, x + max(h, int(w * frac)), y + h, color, -1, h // 2)
 
 
-def heart(img, cx, cy, size, color):
+def heart(img, cx, cy, size, color, outline=True):
     """Filled heart centred on (cx, cy), about `size` px wide."""
     cx, cy, r = int(cx), int(cy), max(2, int(size * 0.27))
-    cv2.circle(img, (cx - r, cy - r // 2), r, color, -1, cv2.LINE_AA)
-    cv2.circle(img, (cx + r, cy - r // 2), r, color, -1, cv2.LINE_AA)
-    pts = [[cx - 2 * r, cy - r // 6], [cx + 2 * r, cy - r // 6], [cx, cy + int(1.9 * r)]]
-    cv2.fillPoly(img, [np.array(pts, dtype=np.int32)], color, cv2.LINE_AA)
+    pts = np.array([[cx - 2 * r, cy - r // 6], [cx + 2 * r, cy - r // 6], [cx, cy + int(1.9 * r)]],
+                   dtype=np.int32)
+    if outline:
+        for dx in (-r, r):
+            cv2.circle(img, (cx + dx, cy - r // 2), r + 2, theme.OUTLINE, -1, cv2.LINE_AA)
+        cv2.polylines(img, [pts], True, theme.OUTLINE, 4, cv2.LINE_AA)
+    for dx in (-r, r):
+        cv2.circle(img, (cx + dx, cy - r // 2), r, color, -1, cv2.LINE_AA)
+    cv2.fillPoly(img, [pts], color, cv2.LINE_AA)

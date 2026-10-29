@@ -15,6 +15,7 @@ import tracking
 from recognition import build_reference_embedding, detect_faces, recognize_faces
 from src.recognizer import SignRecognizer
 from task3_player_association import PlayerAssociator, PoseBodyShapes, faces_from_rush_players
+from task4_game import LEVEL_WORDS
 
 import adapters
 
@@ -33,6 +34,8 @@ class PerceptionPipeline:
         self.fake_p2 = fake_p2
         self.players = tracking.create_players()
         self.signs = SignRecognizer(mirror_input=config.MIRROR_VIEW)   # frames arrive mirrored
+        # the model knows more words than the levels use; only game words may be answered
+        adapters.restrict_vocabulary(self.signs, [w for words in LEVEL_WORDS.values() for w in words])
         self.pose = PoseBodyShapes(model_path=bootstrap.POSE_MODEL) if use_pose else None
         self.assoc = PlayerAssociator()
 

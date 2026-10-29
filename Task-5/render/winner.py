@@ -7,7 +7,7 @@ import numpy as np
 
 import theme
 
-from render.primitives import text
+from render.text import draw as text
 
 CONFETTI = (theme.ACCENT, theme.GOOD, theme.WHITE)
 
@@ -60,7 +60,7 @@ class WinnerDancer:
             col = c if i % 2 == 0 else CONFETTI[(i // 2) % len(CONFETTI)]
             cv2.circle(frame, (px, py), 5, col, -1, cv2.LINE_AA)
 
-        text(frame, f"{theme.PLAYER_NAMES[self.winner]} WINS!", (W // 2, cy - 110), 1.3, c, 3,
+        text(frame, f"{theme.PLAYER_NAMES[self.winner]} WINS!", (W // 2, cy - 110), 56, c,
              align="center")
-        text(frame, f"Final score: {self.score}", (W // 2, cy - 75), 0.9, theme.WHITE, 2,
-             align="center")
+        text(frame, f"Final score: {self.score}", (W // 2, cy - 72), 30, theme.WHITE,
+             font="body", align="center")

@@ -319,7 +319,14 @@ class GameController:
             alive = [p for p in self.ids if p not in dead]
             self.phase = "game_over"
             self.round_open = False
-            self.winner = alive[0] if len(alive) == 1 else None
+            if len(alive) == 1:
+                self.winner = alive[0]
+            else:
+                # everyone ran out of hearts at once: higher score wins, equal scores draw
+                scores = {p: self.players[p].score for p in self.ids}
+                top = max(scores.values())
+                leaders = [p for p, s in scores.items() if s == top]
+                self.winner = leaders[0] if len(leaders) == 1 else None
             for st in self.players.values():
                 st.ready = False; st.ready_dwell.reset(); st.prev_wrist = None
             ev.append(self._ev("game_over", t, winner=self.winner,

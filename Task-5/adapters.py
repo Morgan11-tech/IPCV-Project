@@ -109,6 +109,29 @@ def player_inputs(players, owners, t2_out, signs, W, H, player_ids=(1, 2)):
     return inputs
 
 
+class VocabularyFilter:
+    """Wraps Task 2's classifier so it can only answer with the game's words
+    (plus Idle). Probabilities of other words (e.g. "Bathroom", which the model
+    knows but no level uses) are set to 0 and the rest re-scaled to sum to 1,
+    so guesses, confirmed signs and top-3 lists never contain them."""
+
+    def __init__(self, clf, allowed):
+        self._clf = clf
+        self.classes_ = clf.classes_
+        self._keep = np.array([_word(c) in allowed or str(c).lower() == IDLE_LABEL
+                               for c in clf.classes_], dtype=np.float64)
+
+    def predict_proba(self, X):
+        p = self._clf.predict_proba(X) * self._keep
+        return p / np.maximum(p.sum(axis=1, keepdims=True), 1e-12)
+
+
+def restrict_vocabulary(recognizer, words):
+    """Limit a Task 2 SignRecognizer to `words` (plus Idle)."""
+    allowed = {w.strip().lower() for w in words}
+    recognizer._clf = VocabularyFilter(recognizer._clf, allowed)
+
+
 def fake_player_input(W, H):
     """A stand-in Player 2 for testing alone: always present, holds a still
     open palm (so the game can start) and never signs."""

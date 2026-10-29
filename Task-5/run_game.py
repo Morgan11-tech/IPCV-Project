@@ -80,8 +80,7 @@ def main():
             jingle.play()
         timer.lap("T4 game")
 
-        renderer.on_events(events, t_ms)
-        display = renderer.draw(frame, seen, snap, t_ms)
+        display = renderer.draw(frame, seen, snap, events, t_ms)
         if args.fake_p2:
             draw_fake_player(display, seen.inputs[2])
         if debug:
