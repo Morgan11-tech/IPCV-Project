@@ -14,9 +14,12 @@ Game feel per event:
     wrong sign     "WRONG" wobbles, red flash, small shake
     time's up      banner, red flash, bigger shake, lost hearts swell and fade
     level up       colour band slides across, flash in the level's colour
-    game over      confetti rain + dancing winner in the winner's colour
+    game over      confetti rain + "<NAME> WINS!" in the winner's colour
+Each of these also gets a feedback line ("Lightning hands!", "So close!") from
+feedback.py, shown under the effect.
 """
 import theme
+from feedback import Feedback
 
 from render.backdrop import Backdrop
 from render.fx import EffectsLayer, anchors_from_inputs
@@ -24,7 +27,7 @@ from render.hud import HudAnim, draw_hud
 from render.particles import Particles, confetti_colors, spark_colors
 from render.players import draw_players
 from render.screen_fx import ScreenFx
-from render.winner import WinnerDancer
+from render.winner import WinnerScreen
 
 
 class Renderer:
@@ -34,7 +37,8 @@ class Renderer:
         self.hud_anim = HudAnim()
         self.particles = Particles()
         self.screen = ScreenFx()
-        self.winner = WinnerDancer()
+        self.winner = WinnerScreen()
+        self.feedback = Feedback()
 
     def reset(self):
         self.fx.clear()
@@ -43,9 +47,10 @@ class Renderer:
         self.screen.clear()
         self.winner.stop()
 
-    def _on_events(self, events, anchors, t):
-        self.fx.on_events(events, t)
-        for e in events:
+    def _on_events(self, events, snap, anchors, t):
+        lines = self.feedback.for_events(events, snap)
+        self.fx.on_events(events, t, lines)
+        for e, line in zip(events, lines):
             k = e["type"]
             if k == "score_event":
                 pid = e["player_id"]
@@ -63,12 +68,12 @@ class Renderer:
             elif k == "game_start":
                 self.winner.stop()
             elif k == "game_over" and e["winner"] is not None:
-                self.winner.start(t, e["winner"], score=e["scores"][e["winner"]])
+                self.winner.start(t, e["winner"], score=e["scores"][e["winner"]], line=line)
 
     def draw(self, frame, perception, snap, events, t):
         """Return a new image: the camera frame with the whole game drawn on it."""
         anchors = anchors_from_inputs(perception.inputs)
-        self._on_events(events, anchors, t)
+        self._on_events(events, snap, anchors, t)
         self.hud_anim.observe(snap, events, t)
         if snap["phase"] == "game_over":
             self.particles.confetti(frame.shape[1], confetti_colors(snap["winner"]), n=3)

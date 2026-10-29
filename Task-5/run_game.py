@@ -14,7 +14,7 @@ Run from the project root:
     python Task-5/run_game.py                     # reuse saved faces
     python Task-5/run_game.py --fake-p2           # play alone (fake Player 2)
 
-Keys: Q quit   D debug   F fullscreen   R restart game
+Keys: Q quit   D debug   F fullscreen   R restart game   M mute
 """
 import argparse
 import time
@@ -26,8 +26,8 @@ import config
 import registration
 from recognition import load_models
 from task3_player_association import draw_debug
-from task4_game import VictoryJingle
 
+from audio import Audio
 from flow import GameFlow
 from measure import FpsMeter, FrameTimer
 from pipeline import PerceptionPipeline, get_references
@@ -42,6 +42,7 @@ def main():
     parser.add_argument("--register", action="store_true", help="register faces before playing")
     parser.add_argument("--fake-p2", action="store_true", help="play alone against a fake Player 2")
     parser.add_argument("--no-pose", action="store_true", help="skip pose (faster, Task 3 uses circles)")
+    parser.add_argument("--mute", action="store_true", help="no music or sound effects")
     parser.add_argument("--camera", type=int, default=config.CAMERA_INDEX, help="webcam index")
     args = parser.parse_args()
 
@@ -55,7 +56,7 @@ def main():
 
     perception = PerceptionPipeline(detector, recognizer, references,
                                     use_pose=not args.no_pose, fake_p2=args.fake_p2)
-    flow, renderer, jingle = GameFlow(), Renderer(), VictoryJingle()
+    flow, renderer, audio = GameFlow(), Renderer(), Audio(enabled=not args.mute)
     timer, fps_meter = FrameTimer(), FpsMeter()
 
     debug, fullscreen = config.DEBUG_MODE, False
@@ -76,8 +77,8 @@ def main():
         snap = flow.snapshot(t_ms)
         for p in snap["players"]:
             seen.players[p["player_id"]].score = p["score"]   # the face name tag shows the game score
-        if any(e["type"] == "game_over" and e["winner"] is not None for e in events):
-            jingle.play()
+        audio.on_events(events)
+        audio.update()
         timer.lap("T4 game")
 
         display = renderer.draw(frame, seen, snap, events, t_ms)
@@ -101,11 +102,15 @@ def main():
             fullscreen = not fullscreen
             cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN,
                                   cv2.WINDOW_FULLSCREEN if fullscreen else cv2.WINDOW_NORMAL)
+        elif key == ord("m"):
+            audio.toggle_mute()
         elif key == ord("r"):
             flow.reset()
             renderer.reset()
+            audio.reset()
         frame_id += 1
 
+    audio.close()
     cap.release()
     cv2.destroyAllWindows()
 

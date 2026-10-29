@@ -7,6 +7,8 @@ Event effects: short animations triggered by game events.
   * rings          - a ring in the player's colour expands from their face
   * banners        - centred messages for both players ("GO!", "TIME'S UP");
                      level-ups get a colour band that slides across the screen
+  * captions       - the feedback line (feedback.py) under its effect, e.g.
+                     "Lightning hands!" under "+10"; pops in just after it
 
 Positions come from anchors: each player's face, else their hands.
 """
@@ -40,35 +42,41 @@ class EffectsLayer:
     def __init__(self):
         self.fx = []
 
-    def _add(self, kind, t, dur, pid=None, label="", color=None, size=84):
+    def _add(self, kind, t, dur, pid=None, label="", color=None, size=84, sub=None):
         self.fx.append({"kind": kind, "pid": pid, "t0": t, "dur": dur, "text": label,
-                        "color": color, "size": size})
+                        "color": color, "size": size, "sub": sub})
 
     def clear(self):
         self.fx = []
 
-    def on_events(self, events, t):
-        for e in events:
+    def on_events(self, events, t, lines=None):
+        """lines: optional feedback line per event (same order), shown as captions."""
+        lines = lines or [None] * len(events)
+        game_over = any(e["type"] == "game_over" for e in events)
+        for e, line in zip(events, lines):
             k = e["type"]
             if k == "score_event":
                 pid = e["player_id"]
-                self._add("float", t, 1300, pid, f"+{e['points']}", theme.player_color(pid), 76)
+                self._add("float", t, 1600, pid, f"+{e['points']}", theme.player_color(pid), 76,
+                          sub=line)
                 self._add("ring", t, 700, pid, color=theme.player_color(pid))
             elif k == "wrong_sign":
-                self._add("float", t, 1000, e["player_id"], "WRONG", theme.BAD, 48)
+                self._add("float", t, 1400, e["player_id"], "WRONG", theme.BAD, 48, sub=line)
             elif k == "action_event" and e["action"] == "ready":
                 pid = e["player_id"]
                 self._add("float", t, 1000, pid, "READY!", theme.player_color(pid), 52)
                 self._add("ring", t, 600, pid, color=theme.GOOD)
             elif k == "clash":
-                self._add("banner", t, 1300, label="CLASH!", color=theme.ACCENT)
-            elif k == "round_timeout":
-                self._add("banner", t, 1100, label="TIME'S UP", color=theme.BAD)
+                self._add("banner", t, 1500, label="CLASH!", color=theme.ACCENT, sub=line)
+            elif k == "round_timeout" and not game_over:     # the game-over screen takes over
+                self._add("banner", t, 1400, label="TIME'S UP", color=theme.BAD, sub=line)
             elif k == "round_start" and e["first"]:
                 self._add("banner", t, 900, label="GO!", color=theme.ACCENT, size=110)
             elif k == "level_up":
                 self._add("band", t, 1800, label=f"LEVEL {e['level']}!",
-                          color=theme.LEVEL_COLORS.get(e["level"], theme.ACCENT))
+                          color=theme.LEVEL_COLORS.get(e["level"], theme.ACCENT), sub=line)
+            elif k == "game_over" and e["winner"] is None and line:
+                self._add("banner", t, 2500, label="", color=theme.ACCENT, sub=line)
 
     def draw(self, frame, t, anchors):
         self.fx = [f for f in self.fx if t - f["t0"] < f["dur"]]
@@ -94,6 +102,7 @@ class EffectsLayer:
             cx += 12 * math.sin(u * 30) * (1 - u)
         text(frame, f["text"], (cx, top), f["size"] * (0.4 + 0.6 * pop), f["color"],
              align="center", alpha=fade_out(u))
+        _caption(frame, f, u, cx, top + 40, f["color"] if f["color"] != theme.BAD else theme.WHITE)
 
     @staticmethod
     def _ring(frame, f, u, a):
@@ -106,8 +115,10 @@ class EffectsLayer:
     def _banner(frame, f, u):
         H, W = frame.shape[:2]
         pop = ease_out_back(min(1.0, u / 0.3))
-        text(frame, f["text"], (W // 2, H // 2 + 10 - 25 * ease_out_cubic(u)),
-             f["size"] * (0.5 + 0.5 * pop), f["color"], align="center", alpha=fade_out(u, 0.75))
+        y = H // 2 + 10 - 25 * ease_out_cubic(u)
+        text(frame, f["text"], (W // 2, y), f["size"] * (0.5 + 0.5 * pop), f["color"],
+             align="center", alpha=fade_out(u, 0.75))
+        _caption(frame, f, u, W // 2, y + 56, theme.WHITE, size=40)
 
     @staticmethod
     def _band(frame, f, u):
@@ -122,3 +133,16 @@ class EffectsLayer:
         y, band_h = H // 2 - 65, 130
         blend_rounded_rect(frame, x, y, W, band_h, f["color"], 0.55, radius=0)
         text(frame, f["text"], (x + W / 2, y + 92), 88, theme.WHITE, align="center")
+        _caption(frame, f, u, x + W / 2, y + band_h + 44, theme.WHITE, size=40)
+
+
+def _caption(frame, f, u, cx, y, color, size=34, delay=0.12):
+    """The feedback line under an effect: pops in shortly after it, fades with it."""
+    if not f.get("sub"):
+        return
+    v = (u - delay) / (1 - delay)
+    if v <= 0:
+        return
+    pop = ease_out_back(min(1.0, v / 0.25))
+    text(frame, f["sub"], (cx, y), size * (0.5 + 0.5 * pop), color, align="center",
+         alpha=fade_out(v, 0.75))
