@@ -33,7 +33,7 @@ SIGNING_CONF = 0.5
 GRACE_MS = 250
 
 # --- New targeted confidence threshold ---
-TARGET_CONFIDENCE = 0.60  # Must be at least 60% confident it is the exact target word
+TARGET_CONFIDENCE = 0.50  # Must be at least 50% confident it is the exact target word
 
 LEVEL_TIMES_MS = {1: 15000, 2: 10000, 3: 5000}
 LEVEL_UP_SCORE = 20
