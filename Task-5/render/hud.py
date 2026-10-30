@@ -131,16 +131,12 @@ def draw_target_card(frame, snap, t, anim):
 
     if phase == "game_over":
         winner = snap["winner"]
-        panel(frame, x, y, CARD_W, CARD_H,
+        # who won is shown big in the middle (winner.py); the card only says what's next
+        panel(frame, x, y, CARD_W, 100,
               border=theme.player_color(winner) if winner else None, border_thick=3)
-        text(frame, "GAME OVER", (cx, y + 44), 40, theme.WHITE, align="center")
-        if winner:
-            text(frame, f"{theme.PLAYER_NAMES[winner]} WINS", (cx, y + 82), 32,
-                 theme.player_color(winner), align="center")
-        else:
-            text(frame, "DRAW", (cx, y + 82), 32, theme.ACCENT, align="center")
+        text(frame, "GAME OVER", (cx, y + 48), 40, theme.WHITE, align="center")
         if snap.get("rematch_open", True):
-            text(frame, "hold an open palm to play again", (cx, y + 110), 18, theme.WHITE,
+            text(frame, "hold an open palm to play again", (cx, y + 82), 22, theme.ACCENT,
                  font="body", align="center", alpha=0.6 + 0.4 * pulse(t, 1400))
         return
 

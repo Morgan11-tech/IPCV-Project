@@ -75,8 +75,6 @@ class EffectsLayer:
             elif k == "level_up":
                 self._add("band", t, 1800, label=f"LEVEL {e['level']}!",
                           color=theme.LEVEL_COLORS.get(e["level"], theme.ACCENT), sub=line)
-            elif k == "game_over" and e["winner"] is None and line:
-                self._add("banner", t, 2500, label="", color=theme.ACCENT, sub=line)
 
     def draw(self, frame, t, anchors):
         self.fx = [f for f in self.fx if t - f["t0"] < f["dur"]]
