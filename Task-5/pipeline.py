@@ -3,6 +3,7 @@ Task 5 - perception: everything the camera frame tells us, per frame.
 
     Task 1 faces -> Task 2 hands + signs -> Task 3 hand-to-player
     -> adapters.player_inputs() -> one Task 4 PlayerInput per player
+    + person segmentation (segment.py) for the rendered arena
 
 stabilize.py sits on top of Task 1 and Task 3 to reduce jitter and identity
 or hand-owner flips (smoothing + hysteresis).
@@ -15,12 +16,13 @@ import bootstrap
 import config
 import registration
 import tracking
-from recognition import build_reference_embedding, detect_faces, recognize_faces
+from recognition import build_reference_embedding, detect_faces, load_models, recognize_faces
 from src.recognizer import SignRecognizer
 from task3_player_association import PlayerAssociator, PoseBodyShapes, faces_from_rush_players
 from task4_game import LEVEL_WORDS
 
 import adapters
+from segment import PersonSegmenter
 from stabilize import FaceTracks, HandOwners
 
 
@@ -30,20 +32,55 @@ class Perception:
     hands: list         # Task 3 hand list (pixels), same order as Task 2's hands
     owners: dict        # Task 3 {hand index: pid}
     inputs: dict        # Task 4 {pid: PlayerInput}
+    person_mask: object = None   # HxW float32 0..1 (1 = person), None if segmentation is off
+
+
+@dataclass
+class Models:
+    """Everything slow to load, filled by the steps of loading_steps()."""
+    detector: object = None      # Task 1 YuNet
+    recognizer: object = None    # Task 1 SFace
+    signs: object = None         # Task 2 SignRecognizer
+    pose: object = None          # Task 3 PoseBodyShapes (None with --no-pose)
+    segmenter: object = None     # Task 5 PersonSegmenter
+
+
+def loading_steps(models, use_pose=True):
+    """[(label, function)] that fill `models` one by one. The loading screen
+    runs them in a background thread and shows the label of the current one."""
+    def faces():
+        models.detector, models.recognizer = load_models()
+
+    def signs():
+        models.signs = SignRecognizer(mirror_input=config.MIRROR_VIEW)   # frames arrive mirrored
+        # the model knows more words than the levels use; only game words may be answered
+        adapters.restrict_vocabulary(models.signs, [w for words in LEVEL_WORDS.values() for w in words])
+
+    def pose():
+        models.pose = PoseBodyShapes(model_path=bootstrap.POSE_MODEL)
+
+    def segmenter():
+        models.segmenter = PersonSegmenter()
+
+    steps = [("Loading face models", faces), ("Loading hand and sign models", signs)]
+    if use_pose:
+        steps.append(("Loading body pose model", pose))
+    steps.append(("Loading background segmentation", segmenter))
+    return steps
 
 
 class PerceptionPipeline:
-    def __init__(self, detector, recognizer, references, use_pose=True, fake_p2=False):
-        self.detector, self.recognizer, self.references = detector, recognizer, references
+    def __init__(self, models, references, fake_p2=False, use_segmentation=True):
+        self.detector, self.recognizer, self.references = models.detector, models.recognizer, references
         self.fake_p2 = fake_p2
         self.players = tracking.create_players()
         self.faces = FaceTracks(self.players)
         self.hand_owners = HandOwners()
-        self.signs = SignRecognizer(mirror_input=config.MIRROR_VIEW)   # frames arrive mirrored
-        # the model knows more words than the levels use; only game words may be answered
-        adapters.restrict_vocabulary(self.signs, [w for words in LEVEL_WORDS.values() for w in words])
-        self.pose = PoseBodyShapes(model_path=bootstrap.POSE_MODEL) if use_pose else None
+        self.signs = models.signs
+        self.pose = models.pose
         self.assoc = PlayerAssociator()
+        self.segmenter = models.segmenter
+        self.use_segmentation = use_segmentation
 
     def step(self, frame, frame_id, t_s, timer):
         """Run Tasks 1-3 on one frame; timer.lap() records each stage."""
@@ -69,7 +106,9 @@ class PerceptionPipeline:
         inputs = adapters.player_inputs(self.players, owners, t2_out, self.signs.signs, W, H)
         if self.fake_p2:
             inputs[2] = adapters.fake_player_input(W, H)
-        return Perception(self.players, hands, owners, inputs)
+        mask = self.segmenter.mask(frame, t_s) if self.use_segmentation else None
+        timer.lap("T5 segment")
+        return Perception(self.players, hands, owners, inputs, mask)
 
 
 def get_references(cap, window, detector, recognizer, register, fake_p2):

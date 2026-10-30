@@ -12,7 +12,7 @@ from render.text import draw as text
 HOW_TO_PLAY = [
     ("Hold an open palm", "both players, to get READY"),
     ("Sign the word on the card", "first correct sign scores +10"),
-    ("Wrong sign or time's up", "costs a heart. Last one standing wins!"),
+    ("Wrong sign or time's up", "costs a heart. Last one left wins!"),
 ]
 
 

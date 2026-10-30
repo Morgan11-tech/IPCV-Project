@@ -25,6 +25,7 @@ config.RECOGNIZER_MODEL = os.path.join(ROOT, "Task-1", "models", "face_recogniti
 config.PLAYER_DATA_DIR = os.path.join(ROOT, "player_data")
 POSE_MODEL = os.path.join(ROOT, "Task-3", "models", "pose_landmarker_lite.task")
 ASSETS = os.path.join(ROOT, "Task-5", "assets")
+SEGMENTER_MODEL = os.path.join(ROOT, "Task-5", "models", "selfie_segmenter_landscape.tflite")
 
 # One colour per player everywhere (Task 1 face ring/tag, Task 3 debug view).
 config.PLAYER_NAMES = dict(theme.PLAYER_NAMES)

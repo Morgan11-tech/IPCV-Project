@@ -1,7 +1,11 @@
 """
-Camera colour grading: the scene reacts to the game.
+The scene behind the game: the players placed in a rendered arena, then
+colour graded so the scene reacts to the game.
 
-Every frame:  out = frame * vignette + tint
+Every frame:  out = (mask * camera + (1 - mask) * arena) * vignette + tint
+  * mask     - person segmentation (segment.py): 1 on people, 0 on the room.
+               Without a mask (arena off, B key) the plain camera is used.
+  * arena    - rendered environment (arena.py)
   * vignette - slightly darker overall and darker towards the edges, so the
                players and the HUD stand out from the room.
   * tint     - a faint colour cast for the current scene: none in the lobby,
@@ -15,6 +19,8 @@ import cv2
 import numpy as np
 
 import theme
+
+from render.arena import Arena
 
 BRIGHTNESS = 0.88          # centre of the image
 EDGE_BRIGHTNESS = 0.55     # corners
@@ -36,6 +42,7 @@ def target_tint(snap):
 class Backdrop:
     def __init__(self):
         self._mask, self._size = None, None
+        self.arena = Arena()
         self._tint = np.zeros(3, np.float32)
         self._from, self._to, self._t0 = self._tint.copy(), self._tint.copy(), 0
 
@@ -55,11 +62,19 @@ class Backdrop:
         self._tint = self._from + (self._to - self._from) * u
         return self._tint
 
-    def apply(self, frame, snap, t):
-        """Return the graded copy of the camera frame."""
+    def compose(self, frame, person_mask, snap, t):
+        """Players from the camera over the rendered arena (blend by the mask)."""
+        H, W = frame.shape[:2]
+        arena = self.arena.render(snap, t, W, H)
+        return cv2.blendLinear(frame, arena, person_mask, 1.0 - person_mask)
+
+    def apply(self, frame, snap, t, person_mask=None):
+        """Return the scene: the composited (or plain) camera frame, graded."""
         H, W = frame.shape[:2]
         if self._size != (W, H):
             self._build_mask(W, H)
+        if person_mask is not None:
+            frame = self.compose(frame, person_mask, snap, t)
         out = cv2.multiply(frame, self._mask, scale=1 / 255.0)
         tint = self._current_tint(snap, t)
         if tint.max() >= 0.5:

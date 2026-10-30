@@ -2,10 +2,12 @@
 Task 5 renderer: everything that is drawn on screen goes through here.
 
 Draw order (back to front):
-    camera frame, colour-graded for the current scene (backdrop.py)
+    players cut out of the camera frame and placed in a rendered arena,
+    colour-graded for the current scene (backdrop.py, arena.py)
     -> face rings + name tags in the player's colour (players.py)
     -> particles (particles.py) -> event effects (fx.py) -> HUD (hud.py)
     -> lobby "how to play" panel (guide.py)
+    -> everything drawn over the camera is turned into pixel blocks (pixelate.py)
     -> winner celebration (winner.py)
     -> whole-screen flash / shake (screen_fx.py)
 
@@ -29,6 +31,8 @@ from render.fx import EffectsLayer, anchors_from_inputs
 from render.guide import draw_how_to_play
 from render.hud import HudAnim, draw_hud
 from render.particles import Particles, confetti_colors, spark_colors
+from render.pixelate import pixelate_overlay
+from render import text as text_layer
 from render.players import draw_players
 from render.screen_fx import ScreenFx
 from render.winner import WinnerScreen
@@ -88,7 +92,9 @@ class Renderer:
             self.particles.confetti(frame.shape[1], confetti_colors(snap["winner"]), n=3)
         self.particles.update(t)
 
-        display = self.backdrop.apply(frame, snap, t)
+        display = self.backdrop.apply(frame, snap, t, perception.person_mask)
+        scene = display.copy()                      # before the overlay, for pixelate_overlay
+        text_layer.defer(True)                      # pixel-font text goes on after the pass
         draw_players(display, perception.players)
         self.particles.draw(display)
         self.fx.draw(display, t, anchors)
@@ -100,4 +106,6 @@ class Renderer:
             self._lobby_t = None
         if snap["phase"] == "game_over":
             self.winner.draw(display, t)
+        display = pixelate_overlay(scene, display)
+        text_layer.flush(display)
         return self.screen.apply(display, t)

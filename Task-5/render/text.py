@@ -8,7 +8,17 @@ so a label that stays the same costs only the blend (well under 1 ms).
 
 Fonts (both SIL Open Font License, see assets/fonts/):
     "display"  Lilita One - chunky arcade headings, words, numbers
-    "body"     Nunito ExtraBold - small labels and instructions
+    "body"     small labels and instructions: Press Start 2P (pixel font),
+               sized down by BODY_SCALE so callers can keep Nunito-sized
+               numbers (the pixel font is much wider per point)
+    "pixel"    Press Start 2P at its real size (title screen)
+    "nunito"   Nunito ExtraBold (the former body font)
+
+All text is rendered without anti-aliasing (hard pixel edges, retro look).
+
+Pixel-font text ("body", "pixel") is already pixel art; re-pixelating it in
+render/pixelate.py would break its letters. While defer(True) is on, it is
+collected instead of drawn, and flush(frame) draws it after that pass.
 """
 import os
 from collections import OrderedDict
@@ -20,11 +30,16 @@ import bootstrap
 import theme
 
 FONT_FILES = {"display": ("LilitaOne-Regular.ttf", None),
-              "body": ("Nunito.ttf", "ExtraBold")}
+              "body": ("PressStart2P-Regular.ttf", None),
+              "pixel": ("PressStart2P-Regular.ttf", None),
+              "nunito": ("Nunito.ttf", "ExtraBold")}
+BODY_SCALE = 0.6            # body size 20 -> pixel font 12
+PIXEL_SIZES = (8, 12, 16, 24)   # sizes where Press Start 2P's pixels stay even
 CACHE_SIZE = 600
 
 _fonts = {}
 _sprites = OrderedDict()
+_deferred = None            # list of pending pixel-font draws while deferring
 
 
 def _font(name, size):
@@ -46,6 +61,8 @@ def _sprite(s, font, size, color, outline):
     if hit is not None:
         _sprites.move_to_end(key)
         return hit
+    if font == "body":
+        size = min(PIXEL_SIZES, key=lambda p: abs(p - size * BODY_SCALE))
     f = _font(font, size)
     stroke = max(2, size // 12) if outline else 0
     left, top, right, bottom = f.getbbox(s, anchor="ls", stroke_width=stroke)
@@ -53,8 +70,10 @@ def _sprite(s, font, size, color, outline):
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     b, g, r = color
     ob, og, orr = theme.OUTLINE
-    ImageDraw.Draw(img).text((-left, -top), s, font=f, anchor="ls", fill=(r, g, b, 255),
-                             stroke_width=stroke, stroke_fill=(orr, og, ob, 255))
+    d = ImageDraw.Draw(img)
+    d.fontmode = "1"                                    # no anti-aliasing: hard pixels
+    d.text((-left, -top), s, font=f, anchor="ls", fill=(r, g, b, 255),
+           stroke_width=stroke, stroke_fill=(orr, og, ob, 255))
     rgba = np.asarray(img, dtype=np.float32)
     hit = (rgba[:, :, 2::-1].copy(), rgba[:, :, 3:4] / 255.0, left, top)
     _sprites[key] = hit
@@ -69,12 +88,31 @@ def measure(s, size, font="display", outline=True):
     return bgr.shape[1], bgr.shape[0]
 
 
+def defer(on):
+    """Start (True) or stop (False) collecting pixel-font text instead of drawing it."""
+    global _deferred
+    _deferred = [] if on else None
+
+
+def flush(frame):
+    """Draw the collected pixel-font text and stop deferring."""
+    global _deferred
+    pending, _deferred = _deferred or [], None
+    for args, kwargs in pending:
+        draw(frame, *args, **kwargs)
+
+
 def draw(frame, s, org, size, color=theme.WHITE, font="display", align="left", outline=True,
          alpha=1.0):
     """Draw text with its baseline at org. align: "left", "center", "right".
     alpha (0..1) fades the whole label. Returns (width, height)."""
     if not s or alpha <= 0:
         return 0, 0
+    if _deferred is not None and font in ("body", "pixel"):
+        _deferred.append(((s, org, size), dict(color=color, font=font, align=align,
+                                                outline=outline, alpha=alpha)))
+        bgr, _, _, _ = _sprite(s, font, max(1, int(size)), tuple(int(c) for c in color), outline)
+        return bgr.shape[1], bgr.shape[0]
     bgr, mask, left, top = _sprite(s, font, max(1, int(size)), tuple(int(c) for c in color),
                                    outline)
     h, w = mask.shape[:2]

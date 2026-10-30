@@ -1,6 +1,8 @@
 """
 Task 5 - the integrated sign race (one Python program, OpenCV window).
 
+Start-up:    title + loading screen (models load in the background)
+             -> face registration if needed -> game
 Per frame:   camera -> perception (Tasks 1-3) -> game flow (Task 4 rules)
              -> renderer (everything on screen) -> window
 
@@ -14,7 +16,7 @@ Run from the project root:
     python Task-5/run_game.py                     # reuse saved faces
     python Task-5/run_game.py --fake-p2           # play alone (fake Player 2)
 
-Keys: Q quit   D debug   F fullscreen   R restart game   M mute
+Keys: Q quit   D debug   F fullscreen   R restart game   M mute   B arena on/off
 """
 import argparse
 import time
@@ -24,13 +26,13 @@ import cv2
 
 import config
 import registration
-from recognition import load_models
 from task3_player_association import draw_debug
 
 from audio import Audio
 from flow import GameFlow
+from loading import LoadingScreen
 from measure import FpsMeter, FrameTimer
-from pipeline import PerceptionPipeline, get_references
+from pipeline import Models, PerceptionPipeline, get_references, loading_steps
 from render import Renderer
 from render.overlays import draw_fake_player, draw_stats
 
@@ -42,21 +44,31 @@ def main():
     parser.add_argument("--register", action="store_true", help="register faces before playing")
     parser.add_argument("--fake-p2", action="store_true", help="play alone against a fake Player 2")
     parser.add_argument("--no-pose", action="store_true", help="skip pose (faster, Task 3 uses circles)")
+    parser.add_argument("--no-arena", action="store_true", help="plain camera background, no segmentation")
     parser.add_argument("--mute", action="store_true", help="no music or sound effects")
     parser.add_argument("--camera", type=int, default=config.CAMERA_INDEX, help="webcam index")
     args = parser.parse_args()
 
-    detector, recognizer = load_models()
-    cap = registration.open_camera(args.camera)
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+    audio = Audio(enabled=not args.mute)                 # lobby music starts on the title screen
+    loading = LoadingScreen(WINDOW, config.FRAME_WIDTH, config.FRAME_HEIGHT)
+    loading.show("Starting camera...", 0.0)
+    cap = registration.open_camera(args.camera)          # main thread only (macOS)
+    models = Models()
+    steps = loading_steps(models, use_pose=not args.no_pose)
+    if not loading.run(steps, start_frac=1 / (len(steps) + 1), audio=audio):
+        audio.close()
+        cap.release()
+        return
 
-    references = get_references(cap, WINDOW, detector, recognizer, args.register, args.fake_p2)
+    references = get_references(cap, WINDOW, models.detector, models.recognizer,
+                                args.register, args.fake_p2)
     if references is None:
         return
 
-    perception = PerceptionPipeline(detector, recognizer, references,
-                                    use_pose=not args.no_pose, fake_p2=args.fake_p2)
-    flow, renderer, audio = GameFlow(), Renderer(), Audio(enabled=not args.mute)
+    perception = PerceptionPipeline(models, references, fake_p2=args.fake_p2,
+                                    use_segmentation=not args.no_arena)
+    flow, renderer = GameFlow(), Renderer()
     timer, fps_meter = FrameTimer(), FpsMeter()
 
     debug, fullscreen = config.DEBUG_MODE, False
@@ -102,6 +114,8 @@ def main():
             fullscreen = not fullscreen
             cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN,
                                   cv2.WINDOW_FULLSCREEN if fullscreen else cv2.WINDOW_NORMAL)
+        elif key == ord("b"):
+            perception.use_segmentation = not perception.use_segmentation
         elif key == ord("m"):
             audio.toggle_mute()
         elif key == ord("r"):
