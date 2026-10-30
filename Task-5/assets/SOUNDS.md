@@ -4,11 +4,14 @@
 
 | File | Plays on |
 |---|---|
-| `music/game.mp3` | the whole time, looped, quiet; dips under voices and the victory sound |
+| `music/game.mp3` | lobby, level 1 and game-over screen, looped, quiet; dips under voices and the victory sound |
+| `music/level2.mp3` | level 2 (crossfades in on level up) |
+| `music/level3.mp3` | level 3 |
 | `voice/voice_ready.wav` | game starts ("Are you ready?", during 3-2-1) |
 | `voice/voice_go.wav` | first word of a game |
 | `sfx/correct.wav` | correct sign |
 | `sfx/wrong.wav` | wrong sign |
+| `sfx/clash.wav` | both players correct at the same moment |
 | `voice/voice_level_up.wav` | level up |
 | `sfx/victory.wav` then `voice/voice_winner.wav` | someone wins |
 

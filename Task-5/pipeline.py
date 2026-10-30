@@ -4,6 +4,9 @@ Task 5 - perception: everything the camera frame tells us, per frame.
     Task 1 faces -> Task 2 hands + signs -> Task 3 hand-to-player
     -> adapters.player_inputs() -> one Task 4 PlayerInput per player
 
+stabilize.py sits on top of Task 1 and Task 3 to reduce jitter and identity
+or hand-owner flips (smoothing + hysteresis).
+
 No drawing and no game rules here.
 """
 from dataclasses import dataclass
@@ -18,6 +21,7 @@ from task3_player_association import PlayerAssociator, PoseBodyShapes, faces_fro
 from task4_game import LEVEL_WORDS
 
 import adapters
+from stabilize import FaceTracks, HandOwners
 
 
 @dataclass
@@ -33,6 +37,8 @@ class PerceptionPipeline:
         self.detector, self.recognizer, self.references = detector, recognizer, references
         self.fake_p2 = fake_p2
         self.players = tracking.create_players()
+        self.faces = FaceTracks(self.players)
+        self.hand_owners = HandOwners()
         self.signs = SignRecognizer(mirror_input=config.MIRROR_VIEW)   # frames arrive mirrored
         # the model knows more words than the levels use; only game words may be answered
         adapters.restrict_vocabulary(self.signs, [w for words in LEVEL_WORDS.values() for w in words])
@@ -47,7 +53,7 @@ class PerceptionPipeline:
         assignments, similarities = {}, None
         if faces and frame_id % config.RECOGNITION_INTERVAL == 0:
             assignments, similarities = recognize_faces(self.recognizer, frame, faces, self.references)
-        tracking.update_all_tracks(self.players, faces, assignments, similarities, frame_id)
+        self.faces.update(faces, assignments, similarities, frame_id, t_s)
         timer.lap("T1 faces")
 
         t2_out = self.signs.update(frame, frame_id, timestamp=t_s)
@@ -56,7 +62,8 @@ class PerceptionPipeline:
         hands = adapters.hands_for_task3(t2_out, W, H)
         bodies = self.pose.detect(frame) if self.pose else None
         self.assoc.process(frame_id, faces_from_rush_players(self.players), hands, bodies=bodies)
-        owners = dict(self.assoc.current_owners)
+        owners = self.hand_owners.update(self.assoc.current_owners, self.signs.signs)
+        self.assoc.current_owners = dict(owners)        # debug view shows the sticky owners
         timer.lap("T3 assoc")
 
         inputs = adapters.player_inputs(self.players, owners, t2_out, self.signs.signs, W, H)

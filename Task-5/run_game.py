@@ -78,7 +78,7 @@ def main():
         for p in snap["players"]:
             seen.players[p["player_id"]].score = p["score"]   # the face name tag shows the game score
         audio.on_events(events)
-        audio.update()
+        audio.update(snap)
         timer.lap("T4 game")
 
         display = renderer.draw(frame, seen, snap, events, t_ms)

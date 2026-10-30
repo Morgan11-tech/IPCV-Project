@@ -12,6 +12,9 @@ Add one row per file (see `SOUNDS.md`):
 | File | Site / tool / model | Licence or plan | Prompt |
 |---|---|---|---|
 | `music/game.mp3` | "Battle of the Kingdom 16-Bit Arcade Music", YouTube (TODO: video link + uploader) | TODO: check the video's licence |
+| `music/level2.mp3` | "Sonic Boom" (TODO: site + link) | TODO: licence |  |
+| `music/level3.mp3` | "Battle Arcade Game Over" (TODO: site + link) | TODO: licence |  |
+| `sfx/clash.wav` | "Fah Sound Effects" (TODO: site + link) | TODO: licence |  |
 | `sfx/correct.wav` | "Coin Collect Sound Effect", Pixabay | Pixabay Content License |  |
 | `sfx/wrong.wav` | "Wrong Answer Sound Effect", Pixabay | Pixabay Content License |  |
 | `sfx/victory.wav` | "Game Win Sound Effect", Pixabay | Pixabay Content License |  |
