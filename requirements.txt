@@ -6,4 +6,4 @@ scikit-learn==1.9.1            # must match the version the sign model was saved
 joblib
 matplotlib                     # needed by mediapipe's drawing utils
 pillow>=10                     # game text with real fonts (Task 5)
-pygame>=2.5,<3.0 ; sys_platform != "win32"   # optional: victory jingle
+pygame>=2.5,<3.0  # music and sound effects (Task 5)
