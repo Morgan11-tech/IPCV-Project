@@ -53,8 +53,8 @@ def loading_steps(models, use_pose=True):
 
     def signs():
         models.signs = SignRecognizer(mirror_input=config.MIRROR_VIEW)   # frames arrive mirrored
-        # the model knows more words than the levels use; only game words may be answered
-        adapters.restrict_vocabulary(models.signs, [w for words in LEVEL_WORDS.values() for w in words])
+        # the model knows more words than the game uses; only the level's words may be answered
+        adapters.restrict_vocabulary(models.signs, LEVEL_WORDS[1])
 
     def pose():
         models.pose = PoseBodyShapes(model_path=bootstrap.POSE_MODEL)
@@ -81,6 +81,15 @@ class PerceptionPipeline:
         self.assoc = PlayerAssociator()
         self.segmenter = models.segmenter
         self.use_segmentation = use_segmentation
+        self._level = 1
+
+    def follow_level(self, snap):
+        """Let the sign model choose only from the current level's words
+        (level 1 outside a game)."""
+        level = snap["level"] if snap["phase"] == "playing" else 1
+        if level != self._level:
+            adapters.restrict_vocabulary(self.signs, LEVEL_WORDS[level])
+            self._level = level
 
     def step(self, frame, frame_id, t_s, timer):
         """Run Tasks 1-3 on one frame; timer.lap() records each stage."""

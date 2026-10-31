@@ -14,7 +14,7 @@ lower-cased here, otherwise word_probs.get(target) would always be 0.
 """
 import numpy as np
 
-from task4_game import PlayerInput, synthetic_hand
+from task4_game import TARGET_CONFIDENCE, PlayerInput, synthetic_hand
 
 IDLE_LABEL = "idle"     # Task 2's "nothing is being signed" class
 
@@ -101,7 +101,13 @@ def player_inputs(players, owners, t2_out, signs, W, H, player_ids=(1, 2)):
         )
         sign = _best_sign(idx, signs)
         if sign is not None:
-            inp.locked = bool(sign.get("confirmed"))
+            # Task 2 confirms from 0.30, Task 4 accepts the target only from
+            # TARGET_CONFIDENCE (0.50). A confirmation in between would count
+            # as a wrong sign (lockout) even when it is the right word, so it
+            # is passed on as "not sure yet": no point, no penalty.
+            inp.locked = bool(sign.get("confirmed")) and sign.get("confidence", 0.0) >= TARGET_CONFIDENCE
+            # the word of such an unsure confirmation (Task 5 only: --log near misses)
+            inp.unsure = _word(sign["label"]) if sign.get("confirmed") and not inp.locked else None
             inp.word = _word(sign["label"] if inp.locked else sign["guess"])
             inp.conf = float(sign.get("confidence", 0.0))
             inp.word_probs = word_probs(sign)
@@ -110,16 +116,21 @@ def player_inputs(players, owners, t2_out, signs, W, H, player_ids=(1, 2)):
 
 
 class VocabularyFilter:
-    """Wraps Task 2's classifier so it can only answer with the game's words
-    (plus Idle). Probabilities of other words (e.g. "Bathroom", which the model
-    knows but no level uses) are set to 0 and the rest re-scaled to sum to 1,
-    so guesses, confirmed signs and top-3 lists never contain them."""
+    """Wraps Task 2's classifier so it can only answer with the allowed words
+    (plus Idle). Probabilities of other words are set to 0 and the rest
+    re-scaled to sum to 1, so guesses, confirmed signs and top-3 lists never
+    contain them. The game allows only the current level's words: fewer
+    choices, fewer confusions (offline: target accepted 78% -> 89%)."""
 
     def __init__(self, clf, allowed):
         self._clf = clf
         self.classes_ = clf.classes_
+        self.set_words(allowed)
+
+    def set_words(self, allowed):
+        allowed = {w.strip().lower() for w in allowed}
         self._keep = np.array([_word(c) in allowed or str(c).lower() == IDLE_LABEL
-                               for c in clf.classes_], dtype=np.float64)
+                               for c in self.classes_], dtype=np.float64)
 
     def predict_proba(self, X):
         p = self._clf.predict_proba(X) * self._keep
@@ -127,9 +138,12 @@ class VocabularyFilter:
 
 
 def restrict_vocabulary(recognizer, words):
-    """Limit a Task 2 SignRecognizer to `words` (plus Idle)."""
-    allowed = {w.strip().lower() for w in words}
-    recognizer._clf = VocabularyFilter(recognizer._clf, allowed)
+    """Limit a Task 2 SignRecognizer to `words` (plus Idle); call again to
+    change the words."""
+    if isinstance(recognizer._clf, VocabularyFilter):
+        recognizer._clf.set_words(words)
+    else:
+        recognizer._clf = VocabularyFilter(recognizer._clf, words)
 
 
 def fake_player_input(W, H):

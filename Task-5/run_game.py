@@ -10,11 +10,13 @@ Per frame:   camera -> perception (Tasks 1-3) -> game flow (Task 4 rules)
     flow.py       Task 4's GameController + round scheduling
     render/       all drawing (theme.py holds every colour)
     measure.py    stage timings and FPS
+    game_log.py   per-round CSV of the game rules (--log)
 
 Run from the project root:
     python Task-5/run_game.py --register          # register faces, then play
     python Task-5/run_game.py                     # reuse saved faces
     python Task-5/run_game.py --fake-p2           # play alone (fake Player 2)
+    python Task-5/run_game.py --log               # also write logs/rounds_*.csv
 
 Keys: Q quit   D debug   F fullscreen   R restart game   M mute   B arena on/off
 """
@@ -30,6 +32,7 @@ from task3_player_association import draw_debug
 
 from audio import Audio
 from flow import GameFlow
+from game_log import GameLog
 from loading import LoadingScreen
 from measure import FpsMeter, FrameTimer
 from pipeline import Models, PerceptionPipeline, get_references, loading_steps
@@ -46,6 +49,7 @@ def main():
     parser.add_argument("--no-pose", action="store_true", help="skip pose (faster, Task 3 uses circles)")
     parser.add_argument("--no-arena", action="store_true", help="plain camera background, no segmentation")
     parser.add_argument("--mute", action="store_true", help="no music or sound effects")
+    parser.add_argument("--log", action="store_true", help="write one CSV row per round to logs/")
     parser.add_argument("--camera", type=int, default=config.CAMERA_INDEX, help="webcam index")
     args = parser.parse_args()
 
@@ -70,6 +74,9 @@ def main():
                                     use_segmentation=not args.no_arena)
     flow, renderer = GameFlow(), Renderer()
     timer, fps_meter = FrameTimer(), FpsMeter()
+    log = GameLog() if args.log else None
+    if log:
+        print(f"Logging rounds to {log.path}")
 
     debug, fullscreen = config.DEBUG_MODE, False
     start = time.perf_counter()
@@ -87,8 +94,11 @@ def main():
 
         events = flow.update(t_ms, seen.inputs, frame_id)
         snap = flow.snapshot(t_ms)
+        perception.follow_level(snap)               # sign words for the next frame
         for p in snap["players"]:
             seen.players[p["player_id"]].score = p["score"]   # the face name tag shows the game score
+        if log:
+            log.observe(t_ms, events, snap, seen.inputs)
         audio.on_events(events)
         audio.update(snap)
         timer.lap("T4 game")
@@ -105,7 +115,9 @@ def main():
             fps_meter.tick()
 
         cv2.imshow(WINDOW, display)
-        key = cv2.waitKey(1) & 0xFF
+        key = cv2.waitKey(1) & 0xFF                 # the frame is on screen after this
+        if log:
+            log.frame_shown(int((time.perf_counter() - start) * 1000))
         if key in (ord("q"), 27):
             break
         elif key == ord("d"):
@@ -122,8 +134,13 @@ def main():
             flow.reset()
             renderer.reset()
             audio.reset()
+            if log:
+                log.reset()
         frame_id += 1
 
+    if log:
+        log.close()
+        print(f"Rounds saved to {log.path}")
     audio.close()
     cap.release()
     cv2.destroyAllWindows()

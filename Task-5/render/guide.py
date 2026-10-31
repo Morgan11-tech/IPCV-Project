@@ -10,9 +10,9 @@ from render.primitives import panel
 from render.text import draw as text
 
 HOW_TO_PLAY = [
-    ("Hold an open palm", "both players, to get READY"),
-    ("Sign the word on the card", "first correct sign scores +10"),
-    ("Wrong sign or time's up", "costs a heart. Last one left wins!"),
+    ("HOLD AN OPEN PALM", "both players, to get READY"),
+    ("SIGN THE WORD ON THE CARD", "first correct sign scores +10"),
+    ("TIME'S UP? BOTH LOSE A HEART", "most points at the end wins!"),
 ]
 
 
@@ -33,5 +33,5 @@ def draw_how_to_play(frame, t, shown_t):
              outline=False)
         text(frame, title, (x + 74, row - 4), 26 * (0.6 + 0.4 * pop), theme.WHITE)
         text(frame, sub, (x + 74, row + 20), 18, theme.WHITE, font="body", alpha=clamp01(0.85 * pop))
-    text(frame, "3 levels, less time each level", (W // 2, y + ph - 16), 18, theme.WHITE,
+    text(frame, "sign every word to reach the next level", (W // 2, y + ph - 16), 18, theme.WHITE,
          font="body", align="center", alpha=0.7)
