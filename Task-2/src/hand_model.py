@@ -22,10 +22,17 @@ def load_hand_landmarker(
     min_hand_detection_confidence=0.6,
     min_hand_presence_confidence=0.5,
     min_tracking_confidence=0.5,
+    video=False,
 ):
+    """video=False: IMAGE mode, call landmarker.detect(image); every frame is
+    searched from scratch (used by the notebooks and feature extraction).
+    video=True: VIDEO mode, call landmarker.detect_for_video(image, ms) with
+    increasing timestamps; hands found in the last frame are tracked into the
+    next one, so they are lost less often (e.g. two hands touching) and the
+    full palm search only runs when a hand is lost."""
     options = vision.HandLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=model_path),
-        running_mode=vision.RunningMode.IMAGE,
+        running_mode=vision.RunningMode.VIDEO if video else vision.RunningMode.IMAGE,
         num_hands=num_hands,
         min_hand_detection_confidence=min_hand_detection_confidence,
         min_hand_presence_confidence=min_hand_presence_confidence,

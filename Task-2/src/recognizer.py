@@ -117,6 +117,10 @@ class SignRecognizer:
         # smoothing (One-Euro): ~2.6x jitter reduction for ~18 ms lag, see README
         smooth_min_cutoff=0.5,
         smooth_beta=20.0,
+        # hand detection: VIDEO mode tracks hands from frame to frame (fewer lost hands,
+        # e.g. both hands touching for "More"); False = old per-frame IMAGE mode
+        video_mode=True,
+        min_detection_confidence=0.5,
     ):
         self.mirror_input = mirror_input
         self.buffer_seconds = buffer_seconds
@@ -134,7 +138,11 @@ class SignRecognizer:
         self.smooth_min_cutoff = smooth_min_cutoff
         self.smooth_beta = smooth_beta
 
-        self._landmarker = load_hand_landmarker(model_path=hand_model_path, num_hands=num_hands)
+        self.video_mode = video_mode
+        self._landmarker = load_hand_landmarker(model_path=hand_model_path, num_hands=num_hands,
+                                                min_hand_detection_confidence=min_detection_confidence,
+                                                video=video_mode)
+        self._last_ms = -1               # VIDEO mode needs strictly increasing timestamps
         bundle = joblib.load(classifier_path)
         self._clf = bundle["model"]
         self._target_frames = bundle["target_frames"]
@@ -158,7 +166,13 @@ class SignRecognizer:
 
         img = frame_bgr if self.mirror_input else cv2.flip(frame_bgr, 1)
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        result = self._landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        if self.video_mode:
+            # strictly increasing ms, even if the caller's clock restarts (replaying a new video)
+            self._last_ms = max(self._last_ms + 1, int(t * 1000))
+            result = self._landmarker.detect_for_video(image, self._last_ms)
+        else:
+            result = self._landmarker.detect(image)
         t_detect = time.perf_counter()
 
         dets = []
