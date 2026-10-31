@@ -35,8 +35,12 @@ GRACE_MS = 250
 # --- New targeted confidence threshold ---
 TARGET_CONFIDENCE = 0.50  # Must be at least 50% confident it is the exact target word
 
+# Each level plays its words until every one has been signed: a scored word is
+# done; a word that times out or ends in a clash comes back later in the same
+# level. Then the next level starts. The game ends when all level-3 words are
+# signed (most points wins), or earlier when the hearts run out (a time-out
+# costs both players a heart; most points wins). Equal points = draw.
 LEVEL_TIMES_MS = {1: 15000, 2: 10000, 3: 5000}
-LEVEL_UP_SCORE = 20
 MAX_LEVEL = 3
 
 LEVEL_WORDS = {
@@ -172,9 +176,9 @@ class GameController:
         self.winner, self.log, self._frame_id = None, [], 0
         self.level = 1
         self.level_up_at = None
+        # words of each level still to be signed, in play order
         self._level_queues = {lvl: random.sample(words, len(words))
                               for lvl, words in LEVEL_WORDS.items()}
-        self._queue_pos = {lvl: 0 for lvl in LEVEL_WORDS}
 
     def set_target(self, word, spawned_ms):
         window = LEVEL_TIMES_MS[self.level]
@@ -185,16 +189,16 @@ class GameController:
             st.lockout_until = 0
 
     def next_word(self, t_ms):
-        lvl = self.level
-        q = self._level_queues[lvl]
-        pos = self._queue_pos[lvl]
-        if pos >= len(q):
-            self._level_queues[lvl] = random.sample(LEVEL_WORDS[lvl], len(LEVEL_WORDS[lvl]))
-            q = self._level_queues[lvl]
-            pos = 0
-        word = q[pos]
-        self._queue_pos[lvl] = pos + 1
-        self.set_target(word, t_ms)
+        self.set_target(self._level_queues[self.level].pop(0), t_ms)
+
+    def words_left(self):
+        """Words of the current level still to be signed (incl. the open round)."""
+        open_word = 1 if self.round_open and self.target else 0
+        return len(self._level_queues[self.level]) + open_word
+
+    def _word_comes_back(self):
+        """Timed-out or clashed word: back at the end of this level's queue."""
+        self._level_queues[self.level].append(self.target["word"])
 
     def _ev(self, kind, t, **kw):
         return {"type": kind, "frame_id": self._frame_id, "timestamp_ms": int(t), **kw}
@@ -280,6 +284,7 @@ class GameController:
                 self.round_open = False
                 for pid in self.ids:
                     self.players[pid].hearts = max(0, self.players[pid].hearts - 1)
+                self._word_comes_back()
                 ev.append(self._ev("round_timeout", t, target=self.target["word"]))
             return
         first_t = min(v[0] for v in self.pending.values())
@@ -290,6 +295,7 @@ class GameController:
         self.round_open, self.pending = False, {}
         word = self.target["word"]
         if len(cands) > 1:
+            self._word_comes_back()
             ev.append(self._ev("clash", t, player_ids=[p for _, p, _ in cands],
                                target=word, points=0))
             return
@@ -305,37 +311,36 @@ class GameController:
                            target=word, correct=True, first=True, confidence=conf,
                            points=reward, score=self.players[winner].score,
                            streak=self.players[winner].win_streak))
-        top = max(self.players[p].score for p in self.ids)
-        new_level = min(MAX_LEVEL, 1 + top // LEVEL_UP_SCORE)
-        if new_level > self.level:
-            self.level = new_level
+        if self._level_queues[self.level]:
+            return
+        if self.level < MAX_LEVEL:               # every word of this level signed
+            self.level += 1
             self.level_up_at = t
             ev.append(self._ev("level_up", t, level=self.level,
                                window_ms=LEVEL_TIMES_MS[self.level]))
+        else:
+            self._end_game(t, ev, "words_done")  # every level-3 word signed
 
     def _check_end(self, t, ev):
-        dead = [p for p in self.ids if self.players[p].hearts <= 0]
-        if dead:
-            alive = [p for p in self.ids if p not in dead]
-            self.phase = "game_over"
-            self.round_open = False
-            if len(alive) == 1:
-                self.winner = alive[0]
-            else:
-                # everyone ran out of hearts at once: higher score wins, equal scores draw
-                scores = {p: self.players[p].score for p in self.ids}
-                top = max(scores.values())
-                leaders = [p for p, s in scores.items() if s == top]
-                self.winner = leaders[0] if len(leaders) == 1 else None
-            for st in self.players.values():
-                st.ready = False; st.ready_dwell.reset(); st.prev_wrist = None
-            ev.append(self._ev("game_over", t, winner=self.winner,
-                               scores={p: self.players[p].score for p in self.ids},
-                               hearts={p: self.players[p].hearts for p in self.ids}))
+        if self.phase == "playing" and all(self.players[p].hearts <= 0 for p in self.ids):
+            self._end_game(t, ev, "hearts")
+
+    def _end_game(self, t, ev, reason):
+        """Game over: most points wins, equal points is a draw (winner None)."""
+        self.phase = "game_over"
+        self.round_open = False
+        scores = {p: self.players[p].score for p in self.ids}
+        top = max(scores.values())
+        leaders = [p for p, s in scores.items() if s == top]
+        self.winner = leaders[0] if len(leaders) == 1 else None
+        for st in self.players.values():
+            st.ready = False; st.ready_dwell.reset(); st.prev_wrist = None
+        ev.append(self._ev("game_over", t, winner=self.winner, reason=reason, scores=scores,
+                           hearts={p: self.players[p].hearts for p in self.ids}))
 
     def snapshot(self, t_ms):
         return {"phase": self.phase, "target": self.target, "round_open": self.round_open,
-                "winner": self.winner, "level": self.level,
+                "winner": self.winner, "level": self.level, "words_left": self.words_left(),
                 "level_window_ms": LEVEL_TIMES_MS[self.level],
                 "players": [{"player_id": p.id, "score": p.score, "hearts": p.hearts, "ready": p.ready,
                              "locked_out": t_ms < p.lockout_until, "streak": p.win_streak}
