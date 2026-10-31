@@ -5,6 +5,7 @@
 | `fonts/LilitaOne-Regular.ttf` | Lilita One by Juan Montoreano, via Google Fonts (github.com/google/fonts) | SIL Open Font License 1.1 (`fonts/OFL-LilitaOne.txt`) |
 | `fonts/Nunito.ttf` | Nunito by The Nunito Project Authors, via Google Fonts (github.com/google/fonts) | SIL Open Font License 1.1 (`fonts/OFL-Nunito.txt`) |
 | `fonts/PressStart2P-Regular.ttf` | Press Start 2P by The Press Start 2P Project Authors (CodeMan38), via Google Fonts (github.com/google/fonts) | SIL Open Font License 1.1 (`fonts/OFL-PressStart2P.txt`) |
+| `fonts/RacingSansOne-Regular.ttf` | Racing Sans One by Pablo Impallari and Rodrigo Fuenzalida, via Google Fonts (github.com/google/fonts) | SIL Open Font License 1.1 (`fonts/OFL-RacingSansOne.txt`) |
 
 ## Sounds
 

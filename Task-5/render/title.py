@@ -7,7 +7,8 @@ window size and scaled up with nearest-neighbour interpolation, so the whole
 picture shares one coarse pixel grid (no smooth edges anywhere).
 
   * scene   - the sunset landscape from pixel_scene.py (same as the lobby)
-  * logo    - "SI" blue + "GN" orange, "RACE" yellow; rendered by Pillow with
+  * logo    - "SI" blue + "GN" orange, "RACE" yellow, in the Racing Sans One
+              racing font; rendered by Pillow with
               anti-aliasing off at canvas size, so the letters are made of
               hard pixels; white outline (gaps between letters closed with a
               morphological closing, so each word reads as one solid
@@ -28,7 +29,7 @@ from render.anim import clamp01, ease_out_back, progress
 from render.pixel_scene import NAVY, PIXEL, SCENES, PixelScene
 from render.text import draw as text
 
-FONT = os.path.join(bootstrap.ASSETS, "fonts", "LilitaOne-Regular.ttf")
+FONT = os.path.join(bootstrap.ASSETS, "fonts", "RacingSansOne-Regular.ttf")   # italic racing style
 
 
 def _rgb(bgr):
