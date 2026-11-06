@@ -1,5 +1,5 @@
-![alt text](image.png)
 
+![alt text](image-1.png)
 # IPCV Sign Race
 A two-player webcam game. Both players stand in front of one camera. A word appears on
 screen, and the first player to sign it correctly in sign language scores. Faces
@@ -92,6 +92,8 @@ python Task-5/run_game.py --fake-p2    # test alone against a simulated Player 2
 5. **Game over.** The winner and match statistics are shown. Hold an open palm to play
    again.
 
+
+![alt text](image.png)
 **Options**
 
 | Option | Effect |
