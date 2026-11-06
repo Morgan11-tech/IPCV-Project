@@ -1,5 +1,6 @@
-# IPCV Sign Race
+![alt text](image.png)
 
+# IPCV Sign Race
 A two-player webcam game. Both players stand in front of one camera. A word appears on
 screen, and the first player to sign it correctly in sign language scores. Faces
 identify the players, hands are tracked and their signs classified, and every hand is
